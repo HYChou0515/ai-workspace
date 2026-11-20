@@ -1,0 +1,3042 @@
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 69987aa64..ce7698dd3 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -830,11 +830,18 @@ observability:
+     enabled: true      # 環境變數 WORKSPACE_LLM_LOG=0 可直接關（正式環境 off-switch）
+     dir: logs/llm
+     keep_days: 0        # 0 = 全留（手動清）
++  telemetry:
++    keep_days: 14       # 遙測事件（telemetry-event）保留天數；0 = 全留
+ ```
+ 
+ 每筆生成呼叫留完整 JSON（`request` 區塊就是 `litellm.completion(**request)` 的 kwargs，可直接複製重播，
+ 或跑落地的 `logs/llm/replay.py <file>`）；嵌入/rerank 只留一行索引。刪一天：`rm -rf logs/llm/<date>`。
+ 
++`telemetry.keep_days`：遙測面板與 `/monitor` 讀的 `telemetry-event`（agent 每次 LLM 呼叫、每個工具的
++trace/span，內容含送進模型的完整對話；以及 #407 的儲存統計）。超過天數的由 `blob-gc` 佇列上的清除 job
++永久刪除——API 每 10 分鐘提出一次，由消費 `blob-gc` 的 process 執行（`blob-gc` worker，或 `server.run_consumers` 開著的 API），每次有時間上限，積很多時分幾次清完。
++`0` = 全留，資料表只會一直長（見 `docs/plan-telemetry-retention.md`）。
++
+ ---
+ 
+ ## 13. 環境變數★重點
+diff --git a/docs/deployment.md b/docs/deployment.md
+index 43f94a861..ac04cdb26 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -956,7 +956,7 @@ server:
+ 
+ | | 誰做 | 何時 | 結果 |
+ |---|---|---|---|
+-| **resolve** | app 問 host `POST /tools/resolve` | 每個 turn 開頭；另外開機時預熱一次 | 驗 builder/憑證、抓 bundle、解壓進 host 的 `ext/<sha>` 快取。**沒有任何 sandbox 因此拿到工具** |
++| **resolve** | app 問 host `POST /tools/resolve` | 每個 turn 開頭；另外開機時在**背景**預熱一次（不擋 readiness） | 驗 builder/憑證、抓 bundle、解壓進 host 的 `ext/<sha>` 快取。**沒有任何 sandbox 因此拿到工具** |
+ | **mount** | host 在 `create` 裡 | 建立一顆 sandbox 時，**僅此一次** | 對這次 spec 帶的每個 `{名字: sha}` 建一條 `.tools/<名字> → ext/<sha>` |
+ 
+ 所以「工具在快取裡」和「工具在某顆 sandbox 裡」是兩件事，前者不蘊含後者。
+diff --git a/docs/design-history.md b/docs/design-history.md
+index 8a83f69df..860ce66d4 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -154,6 +154,7 @@
+ | [plan-run-consumers-list.md](plan-run-consumers-list.md) | `server.run_consumers` 接受清單：all-in-one 行程只消費部分 JobType |
+ | [plan-graceful-shutdown.md](plan-graceful-shutdown.md) | pod 離開時不能帶走使用者的對話（graceful shutdown、turn 換 pod） |
+ | [plan-blob-gc-job.md](plan-blob-gc-job.md) | Blob GC 改成 job：API 只負責提出要求 |
++| [plan-telemetry-retention.md](plan-telemetry-retention.md) | 遙測事件只留 14 天（`observability.telemetry.keep_days`）：完整內容照存，超過的由 `blob-gc` 佇列上的清除 job 分批永久刪除；`seq` 改從最大值接續，清除後重啟不會撞號 |
+ | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
+ | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
+ | [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
+@@ -178,6 +179,7 @@
+ | [plan-onboarding-images.md](plan-onboarding-images.md) | onboarding 內文走 markdown、可以放圖 |
+ | [plan-show-file-in-chat.md](plan-show-file-in-chat.md) | agent 在 chat 中顯示 workspace 的檔案（`show_file`） |
+ | [plan-chat-column-vertical-space.md](plan-chat-column-vertical-space.md) | 把聊天欄的高度還回來 |
++| [plan-chat-collapse-middle.md](plan-chat-collapse-middle.md) | 長對話只畫最上面 100 則與最新 1000 則，中間收起；收起條兩頭各一個按鈕、一次再顯示 1000 則，剩不到 1000 則時只有一個「顯示其餘」（推翻 #1002 的「整串都畫」） |
+ 
+ ## PM App
+ 
+diff --git a/docs/migrations.md b/docs/migrations.md
+index f602f01a4..5f64220de 100644
+--- a/docs/migrations.md
++++ b/docs/migrations.md
+@@ -3733,8 +3733,135 @@ AI 工具說明裡每個目標後面多了它的長度上限(沒設的寫 10 個
+ **確認做完**（rollout 後）— 開一個 playground 的 intake item（它預設沒開 `exec`，也沒開 `save_workflow`），先在工具選單打開
+ `save_workflow`，再請 AI 存一個步驟用到 `exec` 的工作流程：存得進去，不再出現 `outside the profile's allowed tools`。
+ 
++### 2026-11-18 · #1032 開機不再等第三方工具預熱 {#pr-1032}
++
++**設定** — 沒有。
++
++**資料** — 不用 migrate。
++
++**k8s · CI 側** — 沒有要做的事。readinessProbe 不用改：pod 會比以前早 ready。
++
++**行為改變，沒有開關**
++- 開機的「tools: warm third-party bundles」不再擋開機，改在背景跑。**為什麼**：它向 sandbox host 發的請求沒有讀取期限，
++  曾有一次打到處理中途死掉的 host，開機乾等 404 秒（其餘步驟 0.2 秒）。
++- 開機 log 改成 `→ tools: warming third-party bundles in the background`；`lifespan: third-party tools warmed, N unavailable`
++  會在 pod ready **之後**才出現。整個預熱失敗時改記 `lifespan: warming third-party tools failed`（附 traceback），不再讓開機失敗。
++- **副作用**：剛開機時，第一個用到 host 從沒抓過的新版 bundle 的 turn 要自己等下載（以前開機時就先下載好）。
++- 每個 turn 開頭問 host 要工具的那個請求**沒有改**，仍然沒有讀取期限。
++
++**確認做完**（rollout 後）— 看新 pod 的開機 log：`warming third-party bundles in the background` 之後的步驟緊接著跑完、
++pod 很快 ready；稍後出現 `third-party tools warmed, N unavailable`。
++
++### 2026-11-19 · 12dbcb53 · #1034 這一輪要回答的訊息也帶上發話人的名字 {#pr-1034}
++
++**設定** — 沒有。
++
++**資料** — 不用 migrate。存下來的訊息沒變，前綴只加在送給 AI 的那份。
++
++**k8s · CI 側** — 沒有要做的事。
++
++**行為改變，沒有開關**
++- 人說的話送給 AI 時，**這一輪要回答的那一則**也加 `[姓名 (handle)]: `（App 聊天、知識庫聊天都是）。以前只有歷史訊息和插話有，
++  這一則沒有，AI 看到的訊息有些有名字、有些沒有。**為什麼**：讓 AI 讀得出每一則話是誰說的，不必靠系統提示那一句猜最後一則是誰。
++- 前綴貼在使用者自己的話上，排在平台接在前面的區塊（context 檔案、技能索引、套用的技能、標記、知識庫卡片、知識圖譜）**之後**。
++  插話和排隊訊息以前把前綴加在整段（含這些區塊）最前面，現在也一樣改成貼在使用者的話上。
++- 系統提示的那一句從 "each earlier user message is prefixed …" 改成 "each message a person wrote is prefixed …"。
++- 目標自動推進那一輪（`[goal] …`）和 workflow 步驟的指令不加前綴：不是人說的話。以前它們在**自己那一輪**沒有前綴，
++  到了之後的歷史裡卻被冠上設定者的名字；現在歷史裡也不加（看存下來訊息的 `driven_by`）。
++- **副作用**：每一輪送給模型的文字多幾個 token（一個名字加 handle）。
++
++**確認做完**（rollout 後）— 送給模型的原文在聊天畫面和 Agent log 上看不到（那裡顯示的是存下來的訊息，本來就沒有前綴），
++要看 app 自己的 LLM 呼叫紀錄（`observability.llm_log`，預設開，`logs/llm/<日期>/`，每筆的 `request` 就是送出的內容）：
++1. 兩個人在同一個 item 各問一題。第二個問題那筆紀錄的最後一則 user 訊息裡，他問的那句話前面是 `[他的姓名 (handle)]: `
++   （訊息開頭可能先是 context 檔案或技能索引的區塊，名字在這些區塊之後）。
++2. 設一個會自動推進的目標，讓它推進兩輪：兩輪的紀錄裡 `[goal] …` 前面都沒有人名，第二輪歷史裡的第一輪也沒有。
++
++部署關掉了 LLM 呼叫紀錄（`WORKSPACE_LLM_LOG=0`）時，這個改動只由測試證明，不必另外確認。
++
++### 2026-11-20 · bdc2d10a · #1037 遙測事件只留 14 天 {#pr-1037}
++
++**設定** — 新 key `observability.telemetry.keep_days`，**預設 14**（`docs/configuration.md` §12）。
++- **預設會開始刪資料**：`telemetry-event`（遙測面板與 `/monitor` 讀的表）裡超過 14 天的列會被永久刪除，
++  包括 `/monitor/summary` 用的 `mirror` / `restore` / `ws_census` 統計。
++- 想維持舊行為（全留）就設 `0`（`rollout 前`）。**為什麼**：這張表每次 LLM 呼叫都存一份送進模型的完整對話，
++  從來沒有清，曾長到約 200 GB。**沒設的症狀**：rollout 後幾分鐘內就開始刪 14 天前的資料。
++
++**資料** — 不用跑 migrate。下面的 SQL 只適用 **Postgres 後端**（設了 `filestore.pg_dsn`、沒設 `filestore.disk_root`）；
++disk 後端沒有這些表，刪掉的列就是刪掉檔案，空間直接回來。
++- **先建索引**（`rollout 前`，Postgres 才需要）：
++  ```sql
++  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_telemetry_event_meta_created_time
++    ON telemetry_event_meta (created_time);
++  ```
++  **為什麼**：清除每一批都用 `created_time` 找最舊的列。specstar 0.13.0a2（目前鎖的版本）自己建的 `idx_created_time`
++  用固定名稱，而 Postgres 的索引名稱整個 schema 共用，所以只有第一張建立的 meta 表真的有，`telemetry_event_meta` 沒有。
++  名稱刻意用 specstar 0.13.0a5 起的命名（`idx_<表名>_<欄位>`）：之後升到那一版，開機補索引時認得它、不會再建一份重複的。
++  **沒建的症狀**：清除照樣正確，但每一批（10 分鐘裡每二三十秒一批）都整張掃過 `telemetry_event_meta`，
++  把共用 Postgres 的快取洗掉。`CONCURRENTLY` 不鎖表，服務運作中可以跑；不能放在交易裡。
++  表裡已經積了很多的話，**先**跑下面的 `TRUNCATE`，索引就幾乎不用時間建。
++- 清除是 `blob-gc` 佇列上的 job（`telemetry-purge`）：API 開機後馬上提出一次、之後每 10 分鐘一次（多個 pod 同一個 10 分鐘只提一次），
++  由消費 `blob-gc` 的那個 process 執行（`rca-worker-blob-gc`，或 `server.run_consumers` 開著的 API）。上一次還在跑時的要求會併掉，
++  所以有積壓時大約每 20 分鐘跑一次。
++- 每批 500 列、從最舊的刪起，跑滿 10 分鐘就停（跑完手上那一批才看時間，所以會稍微超過）。這段期間 blob GC 的 reconcile 排在它後面，
++  最多等一次清除的時間。
++- **很慢，積壓請不要靠它清**：在本機 Postgres 實測每列約 45 ms（每做一件事都重新連線，刪除時還會讀出每個版本的內容），
++  一次 10 分鐘約 1.3 萬列，換算每小時約 4 萬列；線上通常更慢。上線時表裡已經積了很多（例如上百 GB），
++  請用下面的 `TRUNCATE` 一次清掉，清除 job 只負責之後每天超過 14 天的那一份。
++- **Postgres 不會自己把空間還給系統**：刪掉的列空間會被之後的寫入重複使用，但表檔大小不會縮。
++  要立刻縮小（選做，`rollout 前或後` 都可以），二擇一：
++  - **全部清掉**（最快、立刻還空間，不必 `VACUUM`；這張表全部紀錄都會不見）：
++    ```sql
++    SET lock_timeout = '5s';
++    TRUNCATE telemetry_event_resource_index, telemetry_event_resource_data, telemetry_event_meta;
++    ```
++    然後重啟會寫遙測的三個 deployment（`kubectl rollout restart deployment/rca-app deployment/rca-worker-blob-gc
++    deployment/rca-worker-chat-video`）。**為什麼**：沒重啟的 process 會從原本很大的事件序號往上加；之後才重啟的，
++    是從當時表裡最大的序號接下去，如果那時表裡還沒有那些 process 寫的新列，就幾乎從 0 起算。
++    遙測面板的「最近事件」照序號取最大的，後者的事件就一直排在後面、看不到。
++  - **讓清除 job 刪完之後**再 `VACUUM FULL telemetry_event_resource_data;`（會鎖表、需要和剩下資料一樣大的額外空間，挑沒人用的時候）。
++- 表名是 specstar 依 model 名稱產生的（`telemetry-event` → `telemetry_event_…`）。
++
++**k8s · CI 側** — 沒有新 worker 或 probe：跑在既有的 `rca-worker-blob-gc` 上（`workers.yaml` 只改了一行註解）。
++rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）後被中斷：已刪的就是刪了，沒刪到的下一次接著清。
++**沒有 `blob-gc` worker、API 也不消費 `blob-gc` 的部署**：清除 job 會一直停在 pending，資料照樣長（blob GC 本身也一樣不會跑）。
++
++**行為改變，沒有開關**
++- 事件的排序序號（`seq`）開機時改從表裡**最大的序號**往下接，不再用列數。**為什麼**：刪掉舊列後列數會比最大序號小，
++  用列數接續會發出和保留下來的列重複的序號，遙測面板的「最近事件」就會顯示舊事件而不是新的。
++
++**確認做完**（`rollout 後`）
++1. `rca-worker-blob-gc` 的 log 出現 `blob-gc: telemetry purge removed N rows older than …`（all-in-one 部署則在 API 的 log）。
++   後面帶著 `(time budget spent, more may remain: the next ask continues)` 表示這次可能沒清完；穩定之後這段應該不再出現。一直出現就是寫入比清除快（清除每小時約 4 萬列）：調小 `keep_days` 沒有用（穩定時每天跨過期限的量就是每天寫入的量），請改成定期用上面的 `TRUNCATE` 清。這個模組現在自己掛 stdout handler，所以 INFO 印得出來，同一個 worker 的 `blob-gc: reconcile complete …` 也會一起出現。
++2. （Postgres）索引在而且有效：`SELECT indisvalid FROM pg_index WHERE indexrelid = 'idx_telemetry_event_meta_created_time'::regclass;`
++   回 `t`。回 `f` 表示建到一半被中斷（`IF NOT EXISTS` 重跑會直接跳過它），先
++   `DROP INDEX CONCURRENTLY idx_telemetry_event_meta_created_time;` 再重跑建索引那句。
++3. 一兩天後在 Postgres 看這張表沒有再長：
++   ```sql
++   SELECT relname, pg_size_pretty(pg_total_relation_size(oid)) FROM pg_class
++   WHERE relkind = 'r' AND relname LIKE '%telemetry_event%';
++   ```
++
++### 2026-11-20 · 33ddf0a5 · #1039 很長的對話只畫頭尾，中間收起 {#pr-1039}
++
++**設定** — 沒有新 key，也沒有可關掉的開關。
++
++**資料** — 不用跑 migrate；資料和 API 都沒變，只改了前端畫哪些列。
++
++**k8s · CI 側** — 無。
++
++**確認做完**（`rollout 後`）：
++- **行為改變、沒有開關**：一個對話超過 1100 列時（問話、回答、工具卡、通知、錯誤、workflow 步驟等，畫面上的每一列都算），
++  App 聊天、知識庫聊天和底部面板的 Agent log 分頁，都只畫最上面 100 列和最新 1000 列，中間收在「中間還有 N 則未顯示」後面。
++  底部面板的 output / run history 分頁一樣，但算的是工具呼叫（output 只算有輸出的），超過 1100 個才收。
++  收起的超過 1000 則時，兩頭各一個按鈕、一次再顯示 1000 則；不超過 1000 則時只有一個「顯示其餘 N 則」。
++  **為什麼**：整串都畫時，很長的對話打不開（本機 20000 則要 12.7 秒、40 萬個 DOM 節點）。
++  **會被誤會成的症狀**：使用者用瀏覽器 Ctrl+F 找不到很舊的訊息，或以為中間的訊息不見了。
++  資料都還在，按收起條上的按鈕就會畫出來。
++- 打開一個超過 2100 列的對話，看到收起條，按「↑ 再顯示更早的 1000 則」後剛才看的那則留在原位，就是新版（1101 到 2100 列的對話只會看到一個「顯示其餘 N 則」）。
++
+ ---
+ 
++
+ ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
+ 
+ 有些升版會改變「資料在資料庫裡的儲存形狀」，但 **specstar 只在寫入當下**把一列的 `indexed_data`
+diff --git a/docs/plan-chat-collapse-middle.md b/docs/plan-chat-collapse-middle.md
+new file mode 100644
+index 000000000..68a69ddc7
+--- /dev/null
++++ b/docs/plan-chat-collapse-middle.md
+@@ -0,0 +1,31 @@
++# 長對話收起中間
++
++**問題**：很長的對話開不起來。兩個聊天面板（App 的 `AgentPanel`、知識庫的
++`KbChatPanel`）和底部面板的三個紀錄分頁（Agent log、output、run history）都把整串一列一列畫進 DOM。#1002 量過 300 輪：
++打開要排版 1.9s + JS 1.7s、11.4 萬個 DOM 節點；更長的對話就開不起來。
++
++**這份計畫推翻 #1002 的一個決定。** 當時 user 選擇「整串都畫」（瀏覽器 Ctrl+F
++要找得到舊訊息），記在 `docs/subsystems/frontend.md` 的設計決策表，不是計畫文件。
++這次 user 改成收起中間，該列已改寫。
++
++## 決定
++
++| # | 決定 |
++|---|---|
++| D1 | 預設只畫**最上面 100 則**和**最新 1000 則**，中間收起來 **[user]**「Keep最上面100和最新1000」。一則 = feed 的一列，也就是 `log.entries` 的一項：問話、回答、工具卡，也包括通知、錯誤、workflow 步驟、摘要這類列（這個讀法是 agent 定的：問 user 數字之前就說明了，user 沒有反對）。工具呼叫多的對話，1000 列可能只是幾十輪。前 100 列的邊界也可能切在一輪中間。總數不超過 1100 就全部畫，沒有收起條。 |
++| D2 | 收起的地方可以展開，**一次 1000 則**，不是一次全開 **[user]**「也不是全展開 一次開1000」。 |
++| D3 | 收起條上有**兩個**按鈕，由人選方向 **[user]**「讓他選 中間省略部分應該要有兩個地方可以點 一個網上一個往下展開」：「↓ 再顯示接下來的 N 則」讓上面那段往下長；「↑ 再顯示更早的 N 則」讓下面那段往上長。收著的不超過 1000 則時，方向沒有差別，只留一個「顯示其餘 N 則」（GitHub diff 收起區剩得少時也只給一個展開全部）。照 GitHub PR 時間軸 / diff 收起區的做法。 |
++| D4 | 往下長時，上面那段留在原位：新的列出現在收起條上方，把條和下面那段往下推。往上長和「顯示其餘」時，下面那段留在原位：新的列出現在條下方，捲動位置補上新增的高度；對話是從最新的地方打開的，往回捲到收起條的人看的是下面那段。 |
++| D5 | 數量是相對的：上面 = 前 `100 + 往下展開過的` 則，下面 = 最後 `1000 + 往上展開過的` 則。對話進行中新訊息進來，下面那段最舊的一列會併進收起區。（不用「鎖住打開時的索引」：首次載入、斷線重抓、undo 都會整串重建，索引鎖不住。）例外：全部展開過一次就維持全部展開，新訊息不會讓收起條再冒出來。 |
++| D6 | 展開狀態只在這次打開時有效：換對話、重新整理就回到 100 / 1000。 |
++| D7 | 兩個聊天面板和底部面板的 Agent log / output / run history 分頁都走同一個元件 `CollapsedFeed`（數量的計算是 `lib/collapsedFeed.ts` 的 `feedWindow`）。底部面板的 output / run history 分頁交給它的是工具呼叫（output 只交有輸出的），所以那兩個分頁算的是工具呼叫，不是列；換分頁就回到預設（D6 的延伸），不記各分頁的展開。資料、API 不動，只決定哪些列進 DOM。列的 `key` / `index` 仍是它在整串裡的位置，所以以 index 找列的重跑、undo、回報有誤照舊；所有列和收起條放在同一個 keyed 陣列，列跨過收起條時不會重新掛載。 |
++
++## 不做的
++
++- **虛擬化**：列高不固定（markdown、工具卡、圖片），而且 user 要的是「中間收起來、自己選要不要展開」，不是「看不到的不畫」。
++- **後端分頁**：user 說的是「前端不要 render 中間」；整串照樣抓回來（undo、匯出、已回答的問題都讀整串）。
++
++## Phases
++
++- **P1**：`CollapsedFeed` 元件與 `feedWindow`，接進兩個聊天面板和底部面板的三個分頁；D4 的捲動位置。
++- **P2**：用 #1002 的量測方式量打開長對話（3000 則與 20000 則）前後差異；文件（`frontend.md` 決策表、migrations）。
+diff --git a/docs/plan-telemetry-retention.md b/docs/plan-telemetry-retention.md
+new file mode 100644
+index 000000000..707409c86
+--- /dev/null
++++ b/docs/plan-telemetry-retention.md
+@@ -0,0 +1,125 @@
++# Plan — keep telemetry events for 14 days
++
++> Status: grilled 2026-11-19 (D1–D3 are the user's answers). Build via `/tdd`,
++> flat phases, one commit each.
++
++## Problem
++
++A deploy found the `telemetry-event` table at about 200 GB, with nothing
++ever removing a row.
++
++Read from `origin/master` at `336a2d6d`:
++
++- **Every SDK span is stored whole, twice.** `MonitorProcessor`
++  (`monitor/processor.py`) records the OpenAI Agents SDK's `export()` of every
++  trace and span, at its start and at its end, and `SpecstarMonitor.record`
++  (`monitor/specstar_impl.py`) writes each one as a specstar resource.
++- **A generation span carries the whole prompt.** `RunConfig.trace_include_sensitive_data`
++  defaults to `True` and nothing here turns it off, so the LiteLLM path sets
++  the span's `input` to the converted message list — the entire conversation
++  sent to the model — and its `output` to the reply. A function span carries
++  the tool's input and output (file contents, exec output). The longer a
++  conversation, the more every call stores.
++- **Nothing reads those fields.** The telemetry panel (`web/src/api/monitor.ts`)
++  uses a span's `type`, `name`, `model` and `usage`; `/monitor/summary` reads
++  the small `mirror` / `restore` / `ws_census` events.
++- **Nothing removes a row.** The module's docstring says "Append-only, so
++  consider pruning for very long runs"; no code does.
++- **The order key is the row count.** `SpecstarMonitor.__init__` resumes
++  `seq` from `count_resources`. Once rows are removed, the count falls below
++  the largest `seq` already stored, so a restarted process hands out `seq`
++  values the kept rows already hold — and `recent(limit=…)` (newest by `seq`)
++  then shows old events instead of new ones.
++
++The operator's immediate relief (a `TRUNCATE` of the three
++`telemetry_event_*` tables, then a restart of the processes that write
++telemetry) is outside this plan; this plan stops the table growing again.
++
++## Decisions
++
++| # | Decision |
++|---|---|
++| D1 | **Keep storing the full content** (prompt, reply, tool input/output) — the user chose keeping it for a bounded time over not storing it. |
++| D2 | **Keep 14 days by default**, a deploy setting; `0` keeps everything. |
++| D3 | **One rule for the whole table**: every `telemetry-event` row older than the window goes, whatever its kind — including the `mirror` / `restore` / `ws_census` rows `/monitor/summary` reads (the user: only the 14-day rule matters). |
++| D4 | **The setting is `observability.telemetry.keep_days`**, beside `observability.llm_log.keep_days`, which already means "days kept, 0 = all". |
++| D5 | **The purge is a job, not an API timer** (CLAUDE.md, the lifecycle-sweeper convention): the API asks once per window under a `ScanLease`, and the pass runs as a third kind on the `blob-gc` queue, beside `reconcile` and `disk-ledger` — the worker that already does storage upkeep, so no new JobType, worker or manifest. |
++| D6 | **Rows go with `permanently_delete`.** `delete` is a soft delete: the row and its revisions stay, so no space comes back. |
++| D7 | **Bounded per pass**: batches of rows older than the cutoff (oldest first, by the indexed `created_time`), until none are left or a time budget is spent; the next window carries on. A large backlog drains over several passes instead of holding the queue. |
++| D8 | **`seq` resumes from the largest stored `seq`**, not the row count, so a purge never makes a restarted process reuse an order key. |
++
++## Phases
++
++- **P1 — `seq` resumes past the largest stored one (D8).** A test that
++  removes old rows, starts a new monitor over the same spec, records an event,
++  and asserts it is the newest in `recent(limit=1)` — red on the count.
++- **P2 — the setting (D2, D4).** `observability.telemetry.keep_days: int = 14`;
++  documented in `docs/configuration.md`.
++- **P3 — the purge pass (D6, D7).** `SpecstarMonitor.purge_older_than(cutoff, …)`
++  removes rows created before the cutoff, in batches, within a time budget,
++  and returns how many it removed; tests for the boundary (a row exactly at
++  the cutoff stays), the budget, and that the rows are gone permanently.
++- **P4 — the job and its asker (D5).** A `telemetry-purge` kind on
++  `BlobGcCoordinator` that runs the pass with `now − keep_days`, and an API
++  sweeper that asks once per window under a `ScanLease`, at its first tick
++  (as `disk_ledger_sweeper` does) so a rollout starts draining at once. Off
++  when `keep_days` is `0`.
++- **P5 — docs.** A `docs/migrations.md` entry (a default that deletes data is
++  a behaviour change the operator must know about: what goes, when the first
++  pass runs, and that on Postgres deleted rows' space is reused but not
++  returned to the OS without `VACUUM FULL` or the `TRUNCATE` above), and this
++  plan's As built.
++
++## As built
++
++- **P1** — `SpecstarMonitor` resumes `seq` from the row with the largest one
++  (`sort("-seq").limit(1)`).
++- **P2** — `observability.telemetry.keep_days: 14` (`TelemetrySettings`),
++  whitelisted in the loader and documented in `docs/configuration.md` §12.
++- **P3** — a module function rather than the `SpecstarMonitor.purge_older_than`
++  method the phase names: the runner holds the spec, not a monitor.
++  `purge_telemetry_older_than(spec, cutoff, *, batch=500,
++  budget_s=600)` in `monitor/specstar_impl.py`: `search_resources` on
++  `created_time < cutoff`, oldest first, one batch of metadata at a time,
++  `permanently_delete` each row; it stops when a batch comes back short or the
++  budget is spent (checked after each batch, so a pass can run past the
++  budget by one batch). A spec without the telemetry model returns 0.
++- **P4** — the ask carries `keep_days` (`BlobGcPayload.keep_days`), so the
++  runner needs no config of its own and takes the cutoff when the pass runs; a
++  job that says `0` removes nothing (it would otherwise be "older than now",
++  every row). `telemetry_purge_sweeper` asks every
++  `TELEMETRY_PURGE_INTERVAL_S` (10 min; 1 h before review round 1) under a
++  `ScanLease`, at its first tick.
++  `create_app(telemetry_keep_days=0)` by default, so an app built in a test
++  purges nothing; `__main__` passes the setting (pinned by
++  `tests/test_telemetry_wiring.py` through `build_app`).
++  `test_worker`'s registry test now picks the reconcile's ask out of the
++  queue, since the purge asks at boot too.
++- **Review round 1** — `BlobGcCoordinator` installs this module's own stdout
++  handler (`observability/stdout_log.install_own_handler`): the worker
++  configures no logging, so the INFO line the runbook points at was dropped.
++  The Problem section's "nothing reads those fields" holds for code; the
++  generic admin pages (`web/src/routes/autocrud-admin/telemetry-event/`)
++  display whole rows.
++  Measured on a real Postgres by the review: correct (specstar's pool forces
++  UTC, so the tz-aware cutoff compares right; the row at the cutoff stays;
++  `seq` sorts numerically), but costly — ~45 ms a row (every operation
++  opens a connection, `DEFAULT_MINCONN = 0`; `permanently_delete` reads every
++  revision to release blobs), and `telemetry_event_meta` has no
++  `created_time` index (specstar names it `idx_created_time` for every meta
++  table, and Postgres index names are per schema, so only the first table
++  gets one). So: the ask went from hourly to every 10 minutes, which triples
++  the drain rate (a pass about every other window); the purge reports `more` when it stopped on the
++  budget, and the log says so; the runbook adds a `CREATE INDEX
++  CONCURRENTLY` and sends a large backlog to `TRUNCATE` instead. The index
++  is named `idx_telemetry_event_meta_created_time`, the name specstar
++  0.13.0a5 gives it (it names base indexes per table and builds missing
++  ones at boot), so a later bump recognises it instead of building a second. The
++  connection churn and the index-name collision are specstar-wide and are
++  not fixed here.
++- **Review round 2** — the runbook no longer suggests a smaller `keep_days`
++  when the purge cannot keep up (in steady state the rows crossing the cutoff
++  equal the rows written, whatever the window): it says to `TRUNCATE`
++  periodically. The index check reads `indisvalid`, not just the name. The
++  stdout test removes the handler it bound to capsys.
++- **P5** — the `docs/migrations.md` entry for #1037.
+diff --git a/docs/subsystems/frontend.md b/docs/subsystems/frontend.md
+index 0e21dd408..710cef49c 100644
+--- a/docs/subsystems/frontend.md
++++ b/docs/subsystems/frontend.md
+@@ -28,6 +28,7 @@
+ | `web/src/pages/investigation/agentLog.ts` | 純 reducer `reduceAgent(log, ev)`，把 `AgentEvent` 摺進 `AgentLog`（entries + streaming/error/metrics/failover）。也含 `logFromMessages`（持久 thread → log）、`turnPhase`（idle/prep/waiting/thinking/answering 等候態推導）、`formatMetrics`、`isToolRunning`、`turnsFromEntry`。 |
+ | `web/src/components/AgentEntryView.tsx` | 單筆 agent-log entry 的共用渲染（`EntryView`）：訊息塊、可摺疊 `ReasoningBlock`（live 自動展開、「已思考 Ns」摘要）、`ToolCallCard`（本地化行為標籤 + 參數提示 + live stdout + 行內圖片 + 引用）、workflow `PhaseDivider`/`StepLine`、mention/banner。RCA 與 KB chat 共用。答案的 markdown 本文是 memo 過的 `AnswerMarkdown`：只有文字、引用或 `fileUrl` 變了才重新解析。 |
+ | `web/src/components/ChatFeedRow.tsx` | 聊天 feed 的一列（memo 過的 `ChatFeedRow`），RCA 與 KB chat 都經它畫 `EntryView`。只吃這一列要畫的東西；replay / undo / 回報有誤等 handler 來自 `hooks/useStableActions`（身分固定、呼叫時讀最新 closure），`fileUrl` 是一般 prop（繪製時就會呼叫）。長聊天室串流時，一個 token 只重畫正在串流的那一則（#1002）。 |
++| `web/src/components/CollapsedFeed.tsx` | 很長的聊天 feed 只把最上面 100 則與最新 1000 則交給 `renderRow`，中間收在一條「中間還有 N 則未顯示」後面，兩頭各一個按鈕一次再顯示 1000 則（剩不到 1000 則時只有一個「顯示其餘 N 則」）；往上長時補回捲動位置。兩個聊天面板和底部面板的紀錄分頁都經它畫；所有列在同一個 keyed 陣列裡，跨過收起條不會重新掛載。數量的計算在 `lib/collapsedFeed.ts`（[plan-chat-collapse-middle.md](../plan-chat-collapse-middle.md)）。 |
+ | `web/src/components/UserPicker.tsx` | 全站唯一的挑人框（分享、權限、發布、排程、群組、@提及、KB chat 分享等 13 處共用）。順序由 `lib/rankPeople.ts` 決定：還沒打字時是「這次情境裡的人」（呼叫處傳 `related`）→ 常用（`lib/peopleFrecency.ts`，這台瀏覽器、每個登入者一份，最多 8 位、可單筆移除）→ 部門字串開頭相同的字元數 → 名字；打了字先比匹配度（名字開頭 > 名字中間 > id／email 開頭 > 其他欄位）。常用分數在打開時讀一次，挑人時清單不重排；「常用」8 格不算已排在最前面的情境人物；`/me` 回來前不讀也不記；一次性的挑人（群組擁有者、skill 轉移、管理員例外）傳 `rememberPicks={false}` 不記入常用；打字前三塊各掛段落標題「相關／常用／所有」，沒有任何推薦時不掛，打了字就是單純結果（`docs/plan-people-picker-ranking.md`）。 |
+ | `web/src/hooks/useAgent.tsx` | RCA per-investigation agent context（`AgentProvider`/`useAgent`）。以 `useQuery` 注水 Conversation，開一條長存的 #43 broadcast 訂閱驅動所有觀看者的 log，提供 `send`/`cancel`/`undo`/`mention`。`send` 只 POST enqueue（不再自己 stream）；含 #202 跨 pod store-poll 後備。 |
+ | `web/src/hooks/useKbChat.tsx` | 驅動一條 KB chat thread；重用 agentLog 機制。指令式 SSE：`for-await` 摺 `reduceAgent`；stream 結束後 refetch 持久化 thread（帶 stream 省略的 `[n]` 引用）。`client`（`KbApi`）可注入供測試。 |
+@@ -166,7 +167,8 @@ flowchart TD
+ | 資料層 = TanStack Query（`useQuery` 讀、`useMutation`+失效 寫）；SSE 維持指令式 | GET 讀受惠於 cache/dedup/stale；串流回合是事件驅動不合 query 語義，故手刻 hook，只在初始注水 + done 時回同步快取碰 TanStack | CLAUDE.md FE 資料層慣例；`docs/plan-frontend.md` |
+ | `events.ts` 鏡像 `api/events.py`，手動鎖步 | SSE schema 是 agent↔UI 契約，兩邊照同 tag 摺/渲染；無 codegen，靠慣例 + 檔頭註解強制 | CLAUDE.md SSE 慣例；`events.ts` 頭註（[contract](../contract.md) §3） |
+ | 一個 `AgentEntryView` + 一個 `reduceAgent` 共用於 RCA/KB/item chat | 三表面必須一致（reasoning fold、tool card、metrics、引用）；集中渲染+摺疊避免漂移。KB phase 3 也是 agentic，端到端重用同 runner | CLAUDE.md（共用 `AgentEntryView`）；MEMORY `project_kb_phase3_agentic` |
+-| feed 的每一列 memo（`ChatFeedRow` + `AnswerMarkdown`），整串照樣全部畫在 DOM 裡 | 300 輪的對話串流時，每個 token 讓每則重畫、重新解析 markdown（主執行緒 JS 6.1s）。只畫最近 N 輪或虛擬化會讓瀏覽器 Ctrl+F 找不到舊訊息，user 選擇保留整串；`content-visibility: auto` 實測讓打開更慢（排版 −1.2s、樣式 +2.5s），已撤 | PR #1002 |
++| feed 的每一列 memo（`ChatFeedRow` + `AnswerMarkdown`） | 300 輪的對話串流時，每個 token 讓每則重畫、重新解析 markdown（主執行緒 JS 6.1s）。`content-visibility: auto` 實測讓打開更慢（排版 −1.2s、樣式 +2.5s），已撤 | PR #1002 |
++| 很長的對話只畫最上面 100 則與最新 1000 則，中間收起（`CollapsedFeed`），收起條兩頭各一個按鈕、一次再顯示 1000 則（剩不到 1000 則時只有一個「顯示其餘」）；底部面板的 Agent log 分頁也一樣，output / run history 分頁算的是工具呼叫 | #1002 時 user 選擇整串都畫（Ctrl+F 找得到舊訊息），但更長的對話因此開不起來：20000 則打開要 12.7s、40 萬個 DOM 節點；收起後 1.4s、2.2 萬個。user 改成收起中間、自己選要展開哪一頭。不做虛擬化（列高不固定，而且 user 要的是自己展開）；資料照樣整串抓回來，只決定哪些列進 DOM | [plan-chat-collapse-middle.md](../plan-chat-collapse-middle.md) |
+ | 引用在 done 時從持久 thread refetch，不串流 | 後端在回合後把 `[n]→Citation` 掛到持久訊息；SSE 省略，FE 在終止事件重拍 `logFromMessages` | CLAUDE.md KB 攝取/引用慣例；`useKbChat`/`useAgent` 註解 |
+ | #43 broadcast 模型——send 只 enqueue；長存 per-item/per-chat SSE 訂閱驅動所有觀看者；#202 加跨 pod store-poll 後備 | 多寫者協作：每個觀看者都看到每個回合即時（不論誰送）；poll 後備避免觀看者 stream 在非執行 pod 時卡 working… | MEMORY `project_collab_workspace_43`、`project_job_pod_split_acting_user`；`useAgent.tsx` 註解 |
+ | 留在 react-router-dom，僅把 KB 視圖 URL 化（不遷 TanStack Router） | 遷移成本不划算；splat 接 path leaf + `?doc=` overlay 即可滿足 URL 覆蓋 | MEMORY `project_issue_93_tanstack_router`；`docs/plan-issue-93.md` |
+diff --git a/kubernetes/base/workers.yaml b/kubernetes/base/workers.yaml
+index 4a5efb1ca..deb4d4b92 100644
+--- a/kubernetes/base/workers.yaml
++++ b/kubernetes/base/workers.yaml
+@@ -423,7 +423,10 @@ spec:
+       labels:
+         app: rca-worker-blob-gc
+     spec:
+-      terminationGracePeriodSeconds: 120 # let a pass in flight finish its deletes
++      # Lets a blob reconcile in flight finish its deletes. A telemetry purge
++      # pass (up to ~10 min) is cut short instead: each delete stands alone,
++      # and the next pass carries on (docs/plan-telemetry-retention.md).
++      terminationGracePeriodSeconds: 120
+       containers:
+         - name: worker
+           image: rca-app:latest
+diff --git a/src/workspace_app/__main__.py b/src/workspace_app/__main__.py
+index a0f6eea22..660ef4203 100644
+--- a/src/workspace_app/__main__.py
++++ b/src/workspace_app/__main__.py
+@@ -316,6 +316,9 @@ def build_app(
+                 if settings.resources.disk_reconcile_interval_sec
+                 else None
+             ),
++            # docs/plan-telemetry-retention.md: telemetry-event rows older than
++            # this are purged (0 ⇒ never).
++            telemetry_keep_days=settings.observability.telemetry.keep_days,
+             # plan-chat-video-export: the video ceilings + the worker's heartbeat.
+             chat_video=settings.chat_video,
+             # plan-graceful-shutdown P2: the turn-drain budget — the same number
+diff --git a/src/workspace_app/agent/context.py b/src/workspace_app/agent/context.py
+index 9fbb5734e..738538dc5 100644
+--- a/src/workspace_app/agent/context.py
++++ b/src/workspace_app/agent/context.py
+@@ -51,15 +51,14 @@ class Interjection:
+     model call (Q1). It is persisted already; this is what the model is handed.
+ 
+     `content` is what that message's own turn would have been handed (its skill
+-    and marking blocks included), `speaker` the attribution label a shared
+-    thread shows the model (`""` for none), `image_urls` the pixels it carried
+-    for a vision model. `author` and `at` (its `created_at`) say which persisted
++    and marking blocks included, and the person's own words prefixed with their
++    `[Name (handle)]: `), `image_urls` the pixels it carried for a vision
++    model. `author` and `at` (its `created_at`) say which persisted
+     message it is."""
+ 
+     content: str
+     author: str
+     at: int
+-    speaker: str = ""
+     image_urls: list[str] = field(default_factory=list)
+     # Skills applied with this message (#380): their bodies are already in
+     # `content`; the turn reading it lets `read_skill` open them as well (Q7).
+diff --git a/src/workspace_app/agent/tools.py b/src/workspace_app/agent/tools.py
+index 96b527212..f4a6b96c1 100644
+--- a/src/workspace_app/agent/tools.py
++++ b/src/workspace_app/agent/tools.py
+@@ -2608,7 +2608,7 @@ async def ask_user_impl(
+ async def lookup_user_impl(ctx: RunContextWrapper[AgentToolContext], handle: str) -> str:
+     """Look up a teammate in this shared workspace by their handle.
+ 
+-    Each earlier user message is prefixed with `[Name (handle)]:`. Pass the
++    Each message a person wrote is prefixed with `[Name (handle)]:`. Pass the
+     `handle` (the part in parentheses) of someone you need to act on — this
+     resolves them to their canonical id plus section / email, e.g. so you can
+     `mention_user` them. Returns a single line; an unrecognised handle returns
+diff --git a/src/workspace_app/api/app.py b/src/workspace_app/api/app.py
+index ee4773999..374dfc3c3 100644
+--- a/src/workspace_app/api/app.py
++++ b/src/workspace_app/api/app.py
+@@ -624,6 +624,11 @@ def create_app(
+     # default here, so an app built in a test does not reconcile at startup;
+     # a deploy gets `resources.disk_reconcile_interval_sec` (6 h) from config.
+     disk_reconcile_interval: timedelta | None = None,
++    # docs/plan-telemetry-retention.md: telemetry-event rows older than this
++    # many days are purged (a job on the blob-gc queue, asked every 10 min). 0 ⇒
++    # never — the default here, so an app built in a test purges nothing; a
++    # deploy gets `observability.telemetry.keep_days` (14) from config.
++    telemetry_keep_days: int = 0,
+     gc_t1: str = "1h",
+     gc_t2: str = "24h",
+     # plan-chat-video-export: the `chat_video:` config section — the size /
+@@ -1577,6 +1582,7 @@ def create_app(
+         wiki_reflect_daily=wiki_reflect_daily,
+         gc_interval=gc_interval,
+         disk_reconcile_interval=disk_reconcile_interval,
++        telemetry_keep_days=telemetry_keep_days,
+         shutdown_budget=shutdown_budget,
+         turn_reclaim_interval=turn_reclaim_interval,
+         trigger_check_interval=trigger_check_interval,
+diff --git a/src/workspace_app/api/chat_send.py b/src/workspace_app/api/chat_send.py
+index ad9b00c03..face0e120 100644
+--- a/src/workspace_app/api/chat_send.py
++++ b/src/workspace_app/api/chat_send.py
+@@ -44,7 +44,7 @@ from ..resources.conversation import SentMarking
+ from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
+ from ..sandbox.protocol import OutputSink
+ from ..tokens import CallLane
+-from ..users.labels import speaker_label
++from ..users.labels import attributed, speaker_label
+ from ..workcalendar import OffHoursCalendar
+ from .env_layers import PersonEnv
+ from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
+@@ -1114,13 +1114,11 @@ class ChatSendService:
+             )
+             return must_move(fresh.messages, answering, owed)
+ 
+-        users = self._users
+         return QueuedMessage(
+             author=author,
+             at=created,
+             refresh=refresh,
+             on_absorbed=lambda: self._finish_claim(claim),
+-            speaker=speaker_label(users.get(author)) if users is not None and author else "",
+             # #613: a round the goal driver started is not a person speaking.
+             driven=driven,
+         )
+@@ -1706,7 +1704,20 @@ class ChatSendService:
+                 prefix = "\n\n".join(
+                     p for p in (block, skills_block, applied_block, markings_block) if p
+                 )
+-                turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
++                # Every message a person wrote reaches the model as
++                # `[Name (handle)]: …` — history, a message read into a running
++                # turn, and this one. It alone used to go bare, so a shared
++                # thread named the sender of every message but the newest. The
++                # label goes on the person's OWN words, after the blocks above:
++                # those are the platform's, not theirs. A goal round is not a
++                # person speaking, so its text is left as it is.
++                speaker = (
++                    speaker_label(self._users.get(author))
++                    if self._users is not None and author and driven_by is None
++                    else ""
++                )
++                said = attributed(speaker, body.content)
++                turn_content = f"{prefix}\n\n{said}" if prefix else said
+ 
+                 # #43: broadcast the human's message to every live viewer, then queue the
+                 # turn and await ITS completion. The queue serializes concurrent users on
+diff --git a/src/workspace_app/api/kb_chat_routes.py b/src/workspace_app/api/kb_chat_routes.py
+index 2498afdc6..9d3994aae 100644
+--- a/src/workspace_app/api/kb_chat_routes.py
++++ b/src/workspace_app/api/kb_chat_routes.py
+@@ -71,7 +71,7 @@ from ..resources import AgentConfig
+ from ..resources.groups import groups_of
+ from ..resources.kb import Citation, KbChat, KbMessage
+ from ..tokens import CallLane
+-from ..users.labels import speaker_label
++from ..users.labels import attributed, speaker_label
+ from ..users.protocol import UserDirectory
+ from .chat_naming import first_user_snippet
+ from .events import AgentEvent, AnswerText, RunError, ToolEnd, ToolStart, UserMessage
+@@ -1081,14 +1081,19 @@ def register_kb_chat_routes(
+             # stays clean — only the content handed to the agent is augmented.
+             # #484: record the injected card ids in `ctx.injected_card_ids` so a later
+             # kb_search this turn doesn't define the same term a second time.
+-            agent_content = body.content
++            # The person's own words carry their `[Name (handle)]: `, as every
++            # message they wrote does in history; the card and graph blocks
++            # below go in FRONT of it — they are the platform's, not theirs.
++            agent_content = attributed(
++                speaker_label(users.get(asked_by)) if asked_by else "", body.content
++            )
+             if chat.collection_ids:
+                 pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
+                 hits = match_with_ids(body.content, pairs)
+                 cards = [card for _, card in hits]
+                 block = card_context_block(cards)
+                 if block:
+-                    agent_content = f"{block}\n\n{body.content}"
++                    agent_content = f"{block}\n\n{agent_content}"
+                 # Only what the block actually carried — a card the budget dropped
+                 # was never defined for the model, and marking it would keep a later
+                 # kb_search this turn from defining it either.
+@@ -1150,7 +1155,6 @@ def register_kb_chat_routes(
+                     author=asked_by,
+                     at=asked_at,
+                     refresh=refresh,
+-                    speaker=speaker_label(users.get(asked_by)) if asked_by else "",
+                 ),
+             )
+         # #493: await THIS turn, but only to a deadline, then DETACH it — `shield`
+diff --git a/src/workspace_app/api/lifecycle.py b/src/workspace_app/api/lifecycle.py
+index 9739b491a..2399ef2a8 100644
+--- a/src/workspace_app/api/lifecycle.py
++++ b/src/workspace_app/api/lifecycle.py
+@@ -60,6 +60,13 @@ INDEX_STUCK_AFTER_S = 3600.0
+ # wiki collection is due (the actual cadence is once-a-day per collection, gated on
+ # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
+ _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
++# docs/plan-telemetry-retention.md: how often the API ASKS for the telemetry
++# purge (one pod per window). Each pass stops after ~600 s and an ask that
++# arrives while one runs is coalesced away, so with a backlog a pass runs about
++# every other window — purging about half the time; with none, an ask costs one
++# empty query. Hourly asking capped a backlog at ~13k rows/h (~45 ms a row on
++# Postgres, review round 1); this is about three times that.
++TELEMETRY_PURGE_INTERVAL_S = 600.0
+ # #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
+ # backfill any candidate that has no ClusterMember yet, then merge race-split
+ # clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all
+@@ -90,6 +97,22 @@ def consumer_set(run_consumers: bool | list[str]) -> frozenset[str]:
+     return frozenset(run_consumers)
+ 
+ 
++async def _warm_tools(prewarm_tools: Callable[[], Awaitable[dict[str, str]]]) -> None:
++    """The boot's third-party bundle warm, run as a background task. Its log
++    line arrives when it finishes — after the pod is ready — and names what
++    will be unavailable. A failure is logged here: as a background task its
++    exception would otherwise sit unread until shutdown suppresses it, where
++    awaited at boot it used to fail loudly (`prewarm_external_tools` already
++    swallows each app's own failure; this catches the rest, e.g. reading the
++    apps' declarations)."""
++    try:
++        unwarmed = await prewarm_tools()
++    except Exception:
++        logger.exception("lifespan: warming third-party tools failed")
++        return
++    logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
++
++
+ def build_lifespan(
+     *,
+     registry: InvestigationRegistry,
+@@ -110,6 +133,7 @@ def build_lifespan(
+     wiki_reflect_daily: str | None = None,
+     gc_interval: timedelta | None,
+     disk_reconcile_interval: timedelta | None = None,
++    telemetry_keep_days: int = 0,
+     shutdown_budget: timedelta = timedelta(seconds=20),
+     trigger_check_interval: timedelta | None = None,
+     user_schedule_sweeper: UserScheduleSweeper | None = None,
+@@ -498,6 +522,30 @@ def build_lifespan(
+         except asyncio.CancelledError:
+             return
+ 
++    async def telemetry_purge_sweeper(app: FastAPI) -> None:
++        """docs/plan-telemetry-retention.md: ask for the telemetry purge — a
++        pure producer like ``disk_ledger_sweeper`` (one ``ScanLease`` window ⇒
++        one ask, run wherever the ``blob-gc`` JobType is consumed), asking at
++        its FIRST tick so a rollout starts draining a backlog at once. Each pass
++        is time-bounded, so a backlog drains over several windows."""
++        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
++
++        interval_s = TELEMETRY_PURGE_INTERVAL_S
++        lease = ScanLease(SpecstarTriggerStore(spec), "telemetry-purge", interval_s=interval_s)
++
++        def ask() -> None:
++            if not lease.claim():
++                return  # another pod asked this window
++            app.state.blob_gc_coordinator.enqueue_telemetry_purge(keep_days=telemetry_keep_days)
++
++        try:
++            while True:
++                with contextlib.suppress(Exception):
++                    await asyncio.to_thread(ask)
++                await asyncio.sleep(interval_s)
++        except asyncio.CancelledError:
++            return
++
+     async def blob_gc_sweeper(app: FastAPI) -> None:
+         """#245: periodically ask for the orphaned-blob reconcile (deleted files'
+         content), so the per-workspace quota stays honest. A pure producer, like
+@@ -622,15 +670,18 @@ def build_lifespan(
+         with boot_step("health: connectivity checks"):
+             await asyncio.to_thread(health_service.run_fast_sync)
+         # #674: pull third-party tool bundles into the host's cache now, so
+-        # the first turn to use one does not pay a 150MB download. It DELAYS
+-        # readiness but can never fail it — a pod that refuses to start
+-        # because someone else's artifact store is down has turned their
+-        # outage into ours. (Deliberately unlike first-party discovery, which
+-        # IS fail-loud: those bundles live in our own image, so their absence
+-        # means the image is broken.)
+-        with boot_step("tools: warm third-party bundles"):
+-            unwarmed = await prewarm_tools()
+-        logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
++        # the first turn to use one does not pay a 150MB download. It can
++        # never fail the boot — a pod that refuses to start because someone
++        # else's artifact store is down has turned their outage into ours.
++        # (Deliberately unlike first-party discovery, which IS fail-loud: those
++        # bundles live in our own image, so their absence means the image is
++        # broken.) Nor does it DELAY the boot any more: it runs in the
++        # background (started with the other background tasks below, and
++        # cancelled with them), because one boot waited 404 s on a host that
++        # died mid-request (the shared http client has no read deadline) while
++        # every other step took 0.2 s. A turn that arrives before it finishes
++        # resolves the bundle itself.
++        print("  → tools: warming third-party bundles in the background", flush=True)
+         # A per-person cpu/memory cap can only bind if SOMETHING states what a
+         # sandbox costs — the App, or the backend's own ceiling. Saying so needs
+         # to ASK the backend, which for the http one is a real request.
+@@ -735,6 +786,7 @@ def build_lifespan(
+         # the asking API's — `tests/test_worker.py` pins that entering the
+         # lifespan changes nothing.
+         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
++        bg.append(asyncio.create_task(_warm_tools(prewarm_tools)))
+         if perf_trace.enabled():
+             # Only ever sleeps, so any delay it observes beyond its own sleep is
+             # time the loop could not run anything — evidence for blocking work
+@@ -768,6 +820,9 @@ def build_lifespan(
+         if disk_reconcile_interval is not None:
+             bg.append(asyncio.create_task(disk_ledger_sweeper(app)))
+             logger.debug("lifespan: disk-ledger sweeper enabled")
++        if telemetry_keep_days > 0:
++            bg.append(asyncio.create_task(telemetry_purge_sweeper(app)))
++            logger.debug("lifespan: telemetry-purge sweeper enabled")
+         if offhours is not None and offhours.window:
+             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
+             logger.debug("lifespan: goal off-hours sweeper enabled")
+diff --git a/src/workspace_app/api/litellm_runner.py b/src/workspace_app/api/litellm_runner.py
+index 75b23735a..d0a5e6467 100644
+--- a/src/workspace_app/api/litellm_runner.py
++++ b/src/workspace_app/api/litellm_runner.py
+@@ -242,12 +242,10 @@ def _user_item(text: str, image_urls: Sequence[str] = ()) -> dict[str, Any]:
+ 
+ 
+ def interjection_item(interjection: Interjection) -> dict[str, Any]:
+-    """A message folded into a turn that is not its own (docs/plan-interjection.md),
+-    attributed the way `history_items` attributes a shared thread's messages."""
+-    text = interjection.content
+-    if interjection.speaker:
+-        text = f"[{interjection.speaker}]: {text}"
+-    return _user_item(text, interjection.image_urls)
++    """A message folded into a turn that is not its own (docs/plan-interjection.md).
++    Its `content` already names its sender: the surface that composed it put
++    `[Name (handle)]: ` on the person's own words (`users.labels.attributed`)."""
++    return _user_item(interjection.content, interjection.image_urls)
+ 
+ 
+ class _Interjected(Exception):  # noqa: N818 — a signal, not an error
+diff --git a/src/workspace_app/api/turns.py b/src/workspace_app/api/turns.py
+index 3f6d428dc..a9af5401c 100644
+--- a/src/workspace_app/api/turns.py
++++ b/src/workspace_app/api/turns.py
+@@ -45,7 +45,7 @@ from ..failover.classify import classify_error, error_params, raw_error_text
+ from ..observability.stdout_log import install_own_handler
+ from ..resources.conversation import MessageMetrics
+ from ..turn_control import InMemoryTurnControl, ITurnControl
+-from ..users.labels import speaker_label
++from ..users.labels import attributed, speaker_label
+ from ..users.protocol import UserDirectory
+ from .event_bus import IEventBus, InMemoryEventBus
+ from .events import (
+@@ -224,7 +224,7 @@ def _attribute(content: str, author: str | None, users: UserDirectory | None) ->
+     text verbatim)."""
+     if users is None or not author:
+         return content
+-    return f"[{speaker_label(users.get(author))}]: {content}"
++    return attributed(speaker_label(users.get(author)), content)
+ 
+ 
+ #: A produced `TurnMessage` that is not new content but a POSITION: the person's
+@@ -439,12 +439,11 @@ def history_items(
+                 items.append({"role": "user", "content": m.content})
+             continue
+         if m.role == "user" and m.content:
+-            items.append(
+-                {
+-                    "role": "user",
+-                    "content": _attribute(m.content, getattr(m, "author", None), users),
+-                }
+-            )
++            # A driver's round (#615, `driven_by`) is stored as a user message
++            # under its setter's name, but the setter did not say it: replayed
++            # bare, as its own turn was handed it (chat_send leaves it bare too).
++            author = None if getattr(m, "driven_by", None) else getattr(m, "author", None)
++            items.append({"role": "user", "content": _attribute(m.content, author, users)})
+         elif m.role == "assistant" and m.content:
+             # Skip empty-content assistant turns: they marked a tool_call
+             # decision that the following tool message will reconstruct.
+@@ -870,10 +869,7 @@ class QueuedMessage:
+ 
+     `driven` marks a round the goal driver started (#613): not a person
+     speaking, so it never takes a turn over, is never read into another turn,
+-    and is never folded with people's messages — it waits its turn (§9 C10).
+-
+-    `speaker` is the attribution label the model sees for it when it leads or
+-    is read into another turn."""
++    and is never folded with people's messages — it waits its turn (§9 C10)."""
+ 
+     author: str
+     at: int
+@@ -881,7 +877,6 @@ class QueuedMessage:
+         Callable[[list[MessageKey], set[MessageKey], AgentToolContext], Awaitable[bool]] | None
+     ) = None
+     on_absorbed: Callable[[], None] | None = None
+-    speaker: str = ""
+     driven: bool = False
+ 
+ 
+@@ -915,7 +910,6 @@ class _QueueEntry:
+             content=self.content,
+             author=self.message.author,
+             at=self.message.at,
+-            speaker=self.message.speaker,
+             image_urls=list(self.ctx.turn_image_urls),
+             applied_skills=list(self.ctx.applied_skills),
+         )
+diff --git a/src/workspace_app/config/loader.py b/src/workspace_app/config/loader.py
+index 8716efd81..cc8e91883 100644
+--- a/src/workspace_app/config/loader.py
++++ b/src/workspace_app/config/loader.py
+@@ -75,6 +75,7 @@ from .schema import (
+     ServerSettings,
+     Settings,
+     SkillHubSettings,
++    TelemetrySettings,
+     ToolsSettings,
+     ViewPluginsSettings,
+     WikiSettings,
+@@ -890,6 +891,8 @@ _TOP_SCHEMA: dict[str, Any] = {
+     # Observability feature B: the faithful LLM call log.
+     "observability": {
+         "llm_log": _dataclass_keys(LlmLogSettings),
++        # docs/plan-telemetry-retention.md: how long telemetry-event rows stay.
++        "telemetry": _dataclass_keys(TelemetrySettings),
+     },
+     # #196 busy-aware failover global defaults.
+     "failover": _dataclass_keys(FailoverSettings),
+@@ -1273,6 +1276,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
+         event_bus=_build(EventBusSettings, d["event_bus"]),
+         observability=ObservabilitySettings(
+             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
++            telemetry=_build(TelemetrySettings, d["observability"]["telemetry"]),
+         ),
+         failover=_build_failover(d["failover"]),
+         chat_video=_build(ChatVideoSettings, d["chat_video"]),
+diff --git a/src/workspace_app/config/schema.py b/src/workspace_app/config/schema.py
+index cb78b550a..68d4b57c6 100644
+--- a/src/workspace_app/config/schema.py
++++ b/src/workspace_app/config/schema.py
+@@ -1423,9 +1423,21 @@ class LlmLogSettings:
+     keep_days: int = 0
+ 
+ 
++@dataclass(frozen=True)
++class TelemetrySettings:
++    """The `telemetry-event` rows (the agent SDK's traces and spans, prompts
++    included, plus the #407 storage samples) — docs/plan-telemetry-retention.md.
++
++    `keep_days`: rows older than this are permanently deleted by a purge job
++    on the `blob-gc` queue; `0` keeps everything (the table then only grows)."""
++
++    keep_days: int = 14
++
++
+ @dataclass(frozen=True)
+ class ObservabilitySettings:
+     llm_log: LlmLogSettings = field(default_factory=LlmLogSettings)
++    telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
+ 
+ 
+ # ─── chat_video (export a chat as a video: the server-side ceilings) ────
+diff --git a/src/workspace_app/filestore/blob_gc.py b/src/workspace_app/filestore/blob_gc.py
+index 51f278cb4..4343b43f0 100644
+--- a/src/workspace_app/filestore/blob_gc.py
++++ b/src/workspace_app/filestore/blob_gc.py
+@@ -80,6 +80,10 @@ class BlobGcPayload(msgspec.Struct):
+     # model whose blobs would be quarantined, then deleted — silently. Empty
+     # (a hand-made row) is refused too; the sweeper's ask is the way in.
+     registry: list[str] = []
++    # ``telemetry-purge`` only (docs/plan-telemetry-retention.md): rows older
++    # than this many days go. Carried by the ask, so the runner needs no
++    # config of its own; the cutoff is taken when the pass runs.
++    keep_days: int = 0
+ 
+ 
+ class BlobGcJob(Job[BlobGcPayload]):
+@@ -119,6 +123,14 @@ class BlobGcCoordinator:
+         usage_recorder: UsageRecorder | None = None,
+     ) -> None:
+         self._spec = spec
++        # The worker configures no logging, so this module's INFO lines (each
++        # pass's "… complete" / "telemetry purge removed …" — what the runbook
++        # tells an operator to look for) would fall to the last-resort handler
++        # and vanish (observability/stdout_log.py). Here rather than at import,
++        # so a test can rebind it to its own stdout.
++        from ..observability.stdout_log import install_own_handler
++
++        install_own_handler(logger)
+         # docs/plan-storage-all-items.md: the disk-ledger reconcile, a second
+         # kind on this queue — it needs what this worker already boots (the
+         # API's whole composition: every App's items, the ledger, the store).
+@@ -160,13 +172,24 @@ class BlobGcCoordinator:
+         window's disk ask disappear."""
+         self._enqueue("disk-ledger")
+ 
+-    def _enqueue(self, kind: str) -> None:
++    def enqueue_telemetry_purge(self, *, keep_days: int) -> None:
++        """Ask for one telemetry purge (docs/plan-telemetry-retention.md D5):
++        telemetry-event rows older than ``keep_days`` are permanently deleted,
++        within a time budget — a backlog drains over several windows. Same
++        shape as :meth:`enqueue_disk_ledger`, coalesced per kind."""
++        self._enqueue("telemetry-purge", keep_days=keep_days)
++
++    def _enqueue(self, kind: str, *, keep_days: int = 0) -> None:
+         active = self._job_rm.list_resources(QB["status"].in_(_ACTIVE).build())
+         if any(isinstance(r.data, BlobGcJob) and r.data.payload.kind == kind for r in active):
+             return
+         self._job_rm.create(
+             BlobGcJob(
+-                payload=BlobGcPayload(kind=kind, registry=sorted(self._spec.resource_managers)),
++                payload=BlobGcPayload(
++                    kind=kind,
++                    registry=sorted(self._spec.resource_managers),
++                    keep_days=keep_days,
++                ),
+                 partition_key=_PARTITION,
+                 max_retries=0,
+             )
+@@ -176,7 +199,7 @@ class BlobGcCoordinator:
+     def _handle(self, job) -> None:  # job: Resource[BlobGcJob]
+         payload = job.data.payload
+         assert isinstance(payload, BlobGcPayload)
+-        if payload.kind not in ("reconcile", "disk-ledger"):
++        if payload.kind not in ("reconcile", "disk-ledger", "telemetry-purge"):
+             logger.warning("blob-gc: unknown job kind %r", payload.kind)
+             return
+         # Prune BEFORE the pass, whatever the pass does: a reconcile that fails
+@@ -188,8 +211,25 @@ class BlobGcCoordinator:
+         if payload.kind == "disk-ledger":
+             self._disk_ledger()
+             return
++        if payload.kind == "telemetry-purge":
++            self._telemetry_purge(payload.keep_days)
++            return
+         self._reconcile()
+ 
++    def _telemetry_purge(self, keep_days: int) -> None:
++        from ..monitor.specstar_impl import purge_telemetry_older_than
++
++        if keep_days <= 0:  # a hand-made row: 0 means keep everything
++            return
++        cutoff = self._now() - dt.timedelta(days=keep_days)
++        result = purge_telemetry_older_than(self._spec, cutoff)
++        logger.info(
++            "blob-gc: telemetry purge removed %d rows older than %s%s",
++            result.removed,
++            cutoff,
++            " (time budget spent, more may remain: the next ask continues)" if result.more else "",
++        )
++
+     def _disk_ledger(self) -> None:
+         if self._disk_ledger_pass is None:
+             # A runner built without the pass (no filestore wired, no live
+diff --git a/src/workspace_app/monitor/specstar_impl.py b/src/workspace_app/monitor/specstar_impl.py
+index 5d29bf078..9a94c084e 100644
+--- a/src/workspace_app/monitor/specstar_impl.py
++++ b/src/workspace_app/monitor/specstar_impl.py
+@@ -6,16 +6,22 @@ in-memory fan-out, since specstar doesn't push.
+ `record` writes synchronously — fine because spans are low-frequency (a few per
+ turn), not per-token. `recent` pushes the `group_id` filter **and** the sort +
+ limit into the query (both `group_id` and `seq` are indexed), so it only loads
+-the rows it returns rather than the whole history. Append-only, so consider
+-pruning for very long runs.
++the rows it returns rather than the whole history. Rows older than
++``observability.telemetry.keep_days`` are removed by
++:func:`purge_telemetry_older_than`, run as a job on the ``blob-gc`` queue
++(docs/plan-telemetry-retention.md): a generation span carries the whole
++prompt, so an unpurged table grew to about 200 GB.
+ """
+ 
+ from __future__ import annotations
+ 
+ import contextlib
++import datetime as dt
+ import operator
++import time
++from collections.abc import Callable
+ from functools import reduce
+-from typing import Any
++from typing import Any, NamedTuple
+ 
+ from msgspec import Struct, field
+ from specstar import QB, SpecStar
+@@ -30,6 +36,59 @@ class TelemetryEvent(Struct):  # → resource "telemetry-event"
+     payload: dict[str, Any] = field(default_factory=dict)
+ 
+ 
++PURGE_BATCH = 500
++PURGE_BUDGET_S = 600.0
++
++
++class PurgeResult(NamedTuple):
++    removed: int
++    #: Stopped on the time budget with a full batch just removed — rows older
++    #: than the cutoff may remain for the next pass.
++    more: bool
++
++
++def purge_telemetry_older_than(
++    spec: SpecStar,
++    cutoff: dt.datetime,
++    *,
++    batch: int = PURGE_BATCH,
++    budget_s: float = PURGE_BUDGET_S,
++    clock: Callable[[], float] = time.monotonic,
++) -> PurgeResult:
++    """Permanently delete telemetry-event rows created before ``cutoff``,
++    oldest first, ``batch`` at a time, until none are left or ``budget_s`` is
++    spent (checked after each batch); say how many went and whether more may
++    remain (docs/plan-telemetry-retention.md D6/D7).
++
++    ``permanently_delete``, not ``delete``: a soft delete keeps the row and its
++    revisions, so no space would come back. It is not cheap: specstar reads
++    every revision of the row to release its blobs (the ``payload`` dict gives
++    the model a blob collector), and on Postgres each call opens connections
++    afresh — about 45 ms a row measured on a local database (review round 1).
++    Hence the budget, so a large backlog drains over several passes instead of
++    holding the ``blob-gc`` queue. On Postgres the ``created_time`` query is
++    only fast with an index the deploy creates by hand (specstar's own
++    ``idx_created_time`` exists on one meta table per schema; the
++    ``docs/migrations.md`` entry for #1037). A spec with no telemetry model
++    registered (an in-memory monitor deploy) has nothing to purge."""
++    try:
++        rm = spec.get_resource_manager(TelemetryEvent)
++    except KeyError:
++        return PurgeResult(0, more=False)
++    started = clock()
++    removed = 0
++    query = (QB.created_time() < cutoff).sort(QB.created_time().asc()).limit(batch).build()
++    while True:
++        metas = rm.search_resources(query)
++        for meta in metas:
++            rm.permanently_delete(meta.resource_id)
++        removed += len(metas)
++        if len(metas) < batch:
++            return PurgeResult(removed, more=False)
++        if clock() - started >= budget_s:
++            return PurgeResult(removed, more=True)
++
++
+ class SpecstarMonitor(IMonitor):
+     def __init__(self, spec: SpecStar) -> None:
+         super().__init__()
+@@ -39,8 +98,12 @@ class SpecstarMonitor(IMonitor):
+         with contextlib.suppress(ValueError):
+             spec.add_model(TelemetryEvent, indexed_fields=["group_id", "seq", "kind"])
+         self._rm = spec.get_resource_manager(TelemetryEvent)
+-        # Resume the order key past whatever's already persisted (append-only).
+-        self._seq = self._rm.count_resources(QB.all().build())
++        # Resume the order key past the LARGEST one persisted — not the row
++        # count: once old rows are purged (docs/plan-telemetry-retention.md)
++        # the count falls below it, and a restart would hand out keys the kept
++        # rows already hold, so `recent(limit=…)` would show old events.
++        newest = self._rm.list_resources(QB.all().sort("-seq").limit(1).build())
++        self._seq = self._payload_seq(newest[0]) if newest else 0
+ 
+     def record(self, event: MonitorEvent) -> None:
+         self._seq += 1
+@@ -74,6 +137,12 @@ class SpecstarMonitor(IMonitor):
+         events = [self._payload(r) for r in self._rm.list_resources(query)]
+         return events if limit is None else events[::-1]  # flip desc back to oldest→newest
+ 
++    @staticmethod
++    def _payload_seq(r: Any) -> int:
++        data = r.data
++        assert isinstance(data, TelemetryEvent)  # narrow for ty (coverage-clean)
++        return data.seq
++
+     @staticmethod
+     def _payload(r: Any) -> MonitorEvent:
+         data = r.data
+diff --git a/src/workspace_app/users/__init__.py b/src/workspace_app/users/__init__.py
+index 4142f3aab..44c6362ec 100644
+--- a/src/workspace_app/users/__init__.py
++++ b/src/workspace_app/users/__init__.py
+@@ -1,4 +1,4 @@
+-from .labels import display_handle, speaker_label
++from .labels import attributed, display_handle, speaker_label
+ from .mock import MockUserDirectory
+ from .protocol import User, UserDirectory
+ 
+@@ -6,6 +6,7 @@ __all__ = [
+     "MockUserDirectory",
+     "User",
+     "UserDirectory",
++    "attributed",
+     "display_handle",
+     "speaker_label",
+ ]
+diff --git a/src/workspace_app/users/labels.py b/src/workspace_app/users/labels.py
+index 1e16f2039..5065ce50c 100644
+--- a/src/workspace_app/users/labels.py
++++ b/src/workspace_app/users/labels.py
+@@ -21,6 +21,14 @@ def display_handle(user: User) -> str:
+     return user.id
+ 
+ 
++def attributed(label: str, text: str) -> str:
++    """``[Name (handle)]: text`` — a person's message as the model sees it. The
++    ONE spelling of the prefix: history, a message read into a running turn,
++    and the message a turn answers all go through here, so they cannot drift
++    apart. An empty `label` (no person wrote it) leaves `text` unchanged."""
++    return f"[{label}]: {text}" if label else text
++
++
+ def speaker_label(user: User) -> str:
+     """``Name (handle)`` — how a message is attributed to a person in the LLM's
+     view. Collapses to a single token when the name is missing (a graceful
+@@ -35,13 +43,13 @@ def speaker_label(user: User) -> str:
+ def speaker_note(user: User | None) -> str:
+     """A per-turn system instruction (#242) telling the agent who, in a shared
+     multi-collaborator workspace, it is replying to right now — and how to read
+-    the per-speaker prefixes on earlier messages. Empty when no speaker is
++    the per-speaker prefixes on user messages. Empty when no speaker is
+     resolved (single-user / unwired) so the base prompt is left untouched."""
+     if user is None:
+         return ""
+     where = f" from {user.section}" if user.section else ""
+     return (
+         "You are in a shared workspace where teammates may message you in the "
+-        "same thread; each earlier user message is prefixed with its sender as "
++        "same thread; each message a person wrote is prefixed with its sender as "
+         f"[Name (handle)]:. You are now replying to {speaker_label(user)}{where}."
+     )
+diff --git a/tests/api/test_boot_tool_warm.py b/tests/api/test_boot_tool_warm.py
+new file mode 100644
+index 000000000..e1ac18c58
+--- /dev/null
++++ b/tests/api/test_boot_tool_warm.py
+@@ -0,0 +1,85 @@
++"""Warming third-party tool bundles at boot does not hold the pod's startup.
++
++At one boot the warm's request landed on a sandbox host that died while
++handling it; with no deadline the lifespan waited 404 s for the connection to
++be cut while every other step took 0.2 s. Warming is best effort and never
++part of readiness (#674 Q17), so it runs in the background: the app is ready
++and serving while it is still going.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import threading
++
++from tests.api._client import TestClient
++from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
++from workspace_app.filestore.specstar_impl import SpecstarFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++
++class _StuckHost(MockSandbox):
++    """A hosted backend whose tool resolve never answers."""
++
++    resolves_tools = True
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.asked = threading.Event()
++
++    async def resolve_tools(self, declared: dict[str, str]) -> dict:
++        self.asked.set()
++        await asyncio.Event().wait()  # never answers
++        return {}
++
++
++def test_a_host_that_never_answers_does_not_hold_the_boot(monkeypatch):
++    import workspace_app.api.app as app_mod
++
++    monkeypatch.setattr(
++        app_mod, "_declared_external_tools", lambda: {"rca": {"wafer-history": "u"}}
++    )
++    host = _StuckHost()
++    spec = make_spec()
++    app = create_app(
++        spec=spec,
++        sandbox=host,
++        filestore=SpecstarFileStore(spec),
++        runner=ScriptedAgentRunner([MessageDelta(text="ack"), RunDone()]),
++    )
++    done = threading.Event()
++    errors: list[BaseException] = []
++
++    def boot_and_ask() -> None:
++        try:
++            with TestClient(app) as client:
++                # Ready — what the k8s readinessProbe asks — while the warm is stuck.
++                assert host.asked.wait(5), "the warm never started"
++                assert client.get("/readyz").status_code == 200
++        except BaseException as exc:  # surfaced below, not lost in the thread
++            errors.append(exc)
++        done.set()
++
++    t = threading.Thread(target=boot_and_ask, daemon=True)
++    t.start()
++    assert done.wait(30), "the lifespan waited on a host that never answered"
++    assert not errors, errors
++    t.join(5)
++
++
++async def test_a_warm_that_fails_outright_is_logged_not_lost(caplog):
++    """Awaited at boot, a failure outside the per-app guard (reading the apps'
++    declarations) failed the boot loudly; as a background task it would sit
++    unread until shutdown suppressed it. It is logged instead."""
++    import logging
++
++    from workspace_app.api.lifecycle import _warm_tools
++
++    async def broken() -> dict[str, str]:
++        raise ValueError("app.json is not valid")
++
++    with caplog.at_level(logging.ERROR, logger="workspace_app.api.lifecycle"):
++        await _warm_tools(broken)
++    [rec] = [r for r in caplog.records if "warming third-party tools failed" in r.getMessage()]
++    assert rec.exc_info is not None and "app.json is not valid" in str(rec.exc_info[1])
+diff --git a/tests/api/test_context_card_injection.py b/tests/api/test_context_card_injection.py
+index 1c2def4ce..2b9200bab 100644
+--- a/tests/api/test_context_card_injection.py
++++ b/tests/api/test_context_card_injection.py
+@@ -69,6 +69,9 @@ def test_matched_card_is_injected_into_the_agent_turn():
+     assert runner.prompt is not None
+     assert "the capping layer over metal four" in runner.prompt  # the card was injected
+     assert "what is M4?" in runner.prompt  # the user's question is preserved
++    # The card block is the platform's, so the sender's name goes on the
++    # question, after it — never on the block.
++    assert runner.prompt.endswith("\n\n[You (you)]: what is M4?")
+     # the user's persisted message stays clean (no injected block)
+     msgs = client.get(f"/kb/chats/{chat}").json()["messages"]
+     assert msgs[0]["content"] == "what is M4?"
+@@ -84,7 +87,8 @@ def test_no_card_match_leaves_the_message_clean():
+     ]
+     client.post(f"/kb/chats/{chat}/messages", json={"content": "hello there"})
+ 
+-    assert runner.prompt == "hello there"  # nothing matched → no injection
++    # nothing matched → no injection; only the sender's name on their words
++    assert runner.prompt == "[You (you)]: hello there"
+ 
+ 
+ class _CtxRecordingRunner:
+diff --git a/tests/api/test_goal_autocontinue.py b/tests/api/test_goal_autocontinue.py
+index c2779af95..1eb82ac2c 100644
+--- a/tests/api/test_goal_autocontinue.py
++++ b/tests/api/test_goal_autocontinue.py
+@@ -94,6 +94,65 @@ def test_unmet_then_met_continues_once_and_closes_the_goal():
+         assert len(llm.prompts) == 2
+ 
+ 
++class _PromptRunner:
++    """Records the text each turn hands the model as its own message."""
++
++    def __init__(self) -> None:
++        self.prompts: list[str] = []
++        self.histories: list[list[str]] = []
++
++    async def run(self, prompt, ctx):
++        self.prompts.append(prompt)
++        self.histories.append([h.get("content", "") for h in ctx.history])
++        yield MessageDelta(text="working on it")
++        yield RunDone()
++
++
++def test_a_goal_round_is_not_handed_to_the_model_as_the_setters_words():
++    """A person's message reaches the model as `[Name (handle)]: …`. A goal
++    round's text is the driver's, though it runs as the goal's setter — so it is
++    handed over as it is, and the setter is not made to have said it."""
++    llm = _ScriptLlm(["NOT_MET", "MET"])
++    runner = _PromptRunner()
++    app, spec, iid = _app(llm, runner=runner)
++    with TestClient(app) as client:
++        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
++        rid = chat["chat_id"]
++        base = f"/a/rca/items/{iid}/chats/{rid}"
++        client.put(f"{base}/goal", json={"condition": "the report exists"})
++
++        client.post(f"{base}/messages", json={"content": "go"})
++
++        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "met")
++    assert len(runner.prompts) == 2
++    assert runner.prompts[0].endswith("go") and runner.prompts[0].startswith("[")
++    assert runner.prompts[1].startswith("[goal]")
++
++
++def test_a_goal_round_stays_unattributed_once_it_is_history():
++    """The same message reads the same in its own turn and in the next turn's
++    history. A goal round is stored as a user message under its setter's name,
++    so history used to label it as the setter's words one turn later."""
++    llm = _ScriptLlm(["NOT_MET", "NOT_MET", "MET"])
++    runner = _PromptRunner()
++    app, spec, iid = _app(llm, runner=runner)
++    with TestClient(app) as client:
++        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
++        rid = chat["chat_id"]
++        base = f"/a/rca/items/{iid}/chats/{rid}"
++        client.put(f"{base}/goal", json={"condition": "the report exists"})
++
++        client.post(f"{base}/messages", json={"content": "go"})
++
++        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "met")
++    assert len(runner.prompts) == 3
++    round_one = runner.prompts[1]
++    assert round_one.startswith("[goal]")
++    # Turn 3 replays round one as it was sent, and the person's "go" labelled.
++    assert round_one in runner.histories[2]
++    assert runner.prompts[0] in runner.histories[2]
++
++
+ def test_met_on_the_first_turn_closes_without_continuing():
+     llm = _ScriptLlm(["MET"])
+     app, spec, iid = _app(llm)
+diff --git a/tests/api/test_graph_injection_e2e.py b/tests/api/test_graph_injection_e2e.py
+index 81863e544..fe071ff3f 100644
+--- a/tests/api/test_graph_injection_e2e.py
++++ b/tests/api/test_graph_injection_e2e.py
+@@ -121,4 +121,4 @@ def test_a_question_naming_nothing_known_is_untouched():
+     ]
+     client.post(f"/kb/chats/{chat_id}/messages", json={"content": "今天天氣如何?"})
+ 
+-    assert seen == ["今天天氣如何?"]
++    assert seen == ["[Bob Liu (bob)]: 今天天氣如何?"]
+diff --git a/tests/api/test_history.py b/tests/api/test_history.py
+index fece1d055..e1f48e632 100644
+--- a/tests/api/test_history.py
++++ b/tests/api/test_history.py
+@@ -31,6 +31,7 @@ class _UM:
+         self.author = author
+         self.tool_call_id = self.tool_name = self.tool_args = None
+         self.error_kind = None
++        self.driven_by: str | None = None
+ 
+ 
+ class _M:
+@@ -534,13 +535,13 @@ def test_history_replays_from_the_newest_summary_not_the_whole_thread():
+ 
+ def test_build_input_places_folded_messages_between_history_and_the_prompt():
+     """docs/plan-interjection.md Q10: the messages a turn answers for others go
+-    in, in order, after the history and before its own — each attributed like a
+-    history message on a shared thread, with the images it carried."""
++    in, in order, after the history and before its own — as the surface composed
++    them (already attributed), with the images it carried."""
+     from workspace_app.agent.context import Interjection
+ 
+     hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+     leading = [
+-        Interjection(content="q2", author="ann", at=2, speaker="Ann (ann)"),
++        Interjection(content="[Ann (ann)]: q2", author="ann", at=2),
+         Interjection(content="q3", author="ann", at=3, image_urls=["data:image/png;base64,AA"]),
+     ]
+     assert _build_input(hist, "q4", (), leading) == [
+@@ -653,3 +654,16 @@ def test_placing_a_message_brings_the_sign_in_message_written_under_it():
+     placed = take_person_message(thread, 5, "ann")
+     assert [m.content for m in placed] == ["Ann's", "Ann: ERP expired"]
+     assert [m.content for m in thread] == ["Bob's", "Bob: ERP expired", "A1"]
++
++
++@pytest.mark.parametrize("driver", ["goal", "workflow"])
++def test_a_drivers_message_is_replayed_without_its_setters_name(driver: str):
++    """A goal round or a workflow step's prompt is stored as a user message
++    under the person it runs for (`driven_by` says a driver wrote it). That
++    person did not say it, and its own turn was handed it bare: replayed bare."""
++    ann = User(id="u-ann", name="Ann", email="ann@acme.test")
++    said = _UM("user", "go", author="u-ann")
++    driven = _UM("user", "[goal] keep going", author="u-ann")
++    driven.driven_by = driver
++    items = history_items([said, driven], users=_Dir(ann))
++    assert [i["content"] for i in items] == ["[Ann (ann)]: go", "[goal] keep going"]
+diff --git a/tests/api/test_interjection_queue.py b/tests/api/test_interjection_queue.py
+index 800746aa0..217a811b1 100644
+--- a/tests/api/test_interjection_queue.py
++++ b/tests/api/test_interjection_queue.py
+@@ -145,7 +145,7 @@ async def test_queued_messages_no_turn_has_seen_are_answered_by_one_turn():
+         "Q2",
+         q2_ctx,
+         on_complete=lambda p: persisted.append("Q2"),
+-        message=_message("ann", 2, log, speaker="Ann (ann)"),
++        message=_message("ann", 2, log),
+     )
+     f3 = engine.enqueue(
+         "chat",
+@@ -166,7 +166,6 @@ async def test_queued_messages_no_turn_has_seen_are_answered_by_one_turn():
+             content="Q2",
+             author="ann",
+             at=2,
+-            speaker="Ann (ann)",
+             image_urls=["data:image/png;base64,AAA"],
+         )
+     ]
+@@ -320,7 +319,7 @@ async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
+         "Q2",
+         AgentToolContext(applied_skills=["lot-map"]),
+         on_complete=keep("Q2"),
+-        message=_message("ann", 2, log, speaker="Ann (ann)"),
++        message=_message("ann", 2, log),
+     )
+     runner.release.set()
+     await _drain(engine, f1, f2)
+@@ -328,9 +327,7 @@ async def test_the_running_turn_reads_its_authors_message_where_it_is_sent():
+     # Ann's message was read by her running turn, with what it carried, and
+     # got no turn of its own.
+     assert runner.read == [
+-        Interjection(
+-            content="Q2", author="ann", at=2, speaker="Ann (ann)", applied_skills=["lot-map"]
+-        )
++        Interjection(content="Q2", author="ann", at=2, applied_skills=["lot-map"])
+     ]
+     assert runner.turns == ["Q1"]
+     # One reply for Q1 and Q2, with Q2 placed where it was read: after the
+diff --git a/tests/api/test_interjection_runner.py b/tests/api/test_interjection_runner.py
+index 968589d23..4d63c237b 100644
+--- a/tests/api/test_interjection_runner.py
++++ b/tests/api/test_interjection_runner.py
+@@ -141,10 +141,9 @@ async def test_a_message_sent_mid_turn_is_read_at_the_next_model_call(monkeypatc
+         if len(model.inputs) == 1 and len(asked) == 2:
+             return [
+                 Interjection(
+-                    content="Q2",
++                    content="[Ann (ann)]: Q2",
+                     author="ann",
+                     at=2,
+-                    speaker="Ann (ann)",
+                     applied_skills=["lot-map"],
+                 )
+             ]
+diff --git a/tests/api/test_interjection_send.py b/tests/api/test_interjection_send.py
+index 5fc7f565d..7c14b56a6 100644
+--- a/tests/api/test_interjection_send.py
++++ b/tests/api/test_interjection_send.py
+@@ -78,7 +78,7 @@ async def test_a_message_sent_while_the_answer_streams_sees_that_answer():
+ 
+     # Q2's turn was handed the thread with A1 in it, and Q2 itself as the turn.
+     assert runner.turns[1]["prompt"].endswith("Q2")
+-    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A(Q1)"]
++    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A([u]: Q1)"]
+ 
+ 
+ async def test_two_messages_queued_behind_an_answer_are_answered_together():
+@@ -111,16 +111,16 @@ async def test_two_messages_queued_behind_an_answer_are_answered_together():
+     assert len(runner.turns) == 2
+     assert runner.turns[1]["prompt"].endswith("Q3")
+     assert [c.endswith("Q2") for c in runner.turns[1]["leading"]] == [True]
+-    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A(Q1)"]
++    assert runner.turns[1]["history"][-2:] == ["[u]: Q1", "A([u]: Q1)"]
+     # The thread reads in the order the AI read it: Q2 and Q3 were persisted
+     # above A1 when they were accepted, and moved to where that turn read them.
+     thread = [(m.role, m.content) for m in _conversation(spec, iid).messages]
+     assert thread == [
+         ("user", "Q1"),
+-        ("assistant", "A(Q1)"),
++        ("assistant", "A([u]: Q1)"),
+         ("user", "Q2"),
+         ("user", "Q3"),
+-        ("assistant", "A(Q3)"),
++        ("assistant", "A([u]: Q3)"),
+     ]
+     # No claim is left open: the folded message was settled by the reply.
+     assert app.state.turn_claims.list_open() == []
+@@ -182,7 +182,7 @@ async def test_a_message_sent_mid_turn_by_its_author_is_answered_in_that_turn():
+         ("user", "Q1"),
+         ("tool", "lot 1"),
+         ("user", "Q2"),
+-        ("assistant", "answer to Q1 + Q2"),
++        ("assistant", "answer to [u]: Q1 + [u]: Q2"),
+     ]
+     assert app.state.turn_claims.list_open() == []
+ 
+@@ -260,7 +260,7 @@ async def test_another_persons_message_takes_the_turn_over_and_says_so():
+         ("tool", "lot 1", None, None),
+         ("error", "The previous response was interrupted by a new message.", "bob", "interrupted"),
+         ("user", "Q2", "bob", None),
+-        ("assistant", "A(Q2)", "RCA Agent", None),
++        ("assistant", "A([Bob Liu (bob)]: Q2)", "RCA Agent", None),
+     ]
+     assert app.state.turn_claims.list_open() == []
+ 
+@@ -313,15 +313,15 @@ async def test_a_message_still_preparing_is_kept_out_of_other_turns_histories():
+ 
+     assert [t["prompt"][-2:] for t in runner.turns] == ["Q1", "Q2", "Q3"]
+     assert not any("Q3" in (h or "") for h in runner.turns[1]["history"])
+-    assert runner.turns[2]["history"][-4:] == ["[u]: Q1", "A(Q1)", "[u]: Q2", "A(Q2)"]
++    assert runner.turns[2]["history"][-4:] == ["[u]: Q1", "A([u]: Q1)", "[u]: Q2", "A([u]: Q2)"]
+     thread = [(m.role, m.content) for m in _conversation(spec, iid).messages]
+     assert thread == [
+         ("user", "Q1"),
+-        ("assistant", "A(Q1)"),
++        ("assistant", "A([u]: Q1)"),
+         ("user", "Q2"),
+-        ("assistant", "A(Q2)"),
++        ("assistant", "A([u]: Q2)"),
+         ("user", "Q3"),
+-        ("assistant", "A(Q3)"),
++        ("assistant", "A([u]: Q3)"),
+     ]
+ 
+ 
+diff --git a/tests/api/test_kb_chat_api.py b/tests/api/test_kb_chat_api.py
+index 380e1eb74..3964e04e3 100644
+--- a/tests/api/test_kb_chat_api.py
++++ b/tests/api/test_kb_chat_api.py
+@@ -135,9 +135,11 @@ class _HistoryRecordingRunner:
+ 
+     def __init__(self) -> None:
+         self.seen_history: list[list[dict[str, str]]] = []
++        self.seen_prompts: list[str] = []
+ 
+     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+         self.seen_history.append(list(ctx.history))
++        self.seen_prompts.append(prompt)
+         yield MessageDelta(text=f"answer to {prompt}")
+         yield RunDone()
+ 
+@@ -156,8 +158,10 @@ def test_agent_sees_prior_turns_as_history():
+     assert runner.seen_history[0] == []
+     assert runner.seen_history[1] == [
+         {"role": "user", "content": "[You (you)]: q1"},
+-        {"role": "assistant", "content": "answer to q1"},
++        {"role": "assistant", "content": "answer to [You (you)]: q1"},
+     ]
++    # ...and the message each turn answers reads as it will once it is history.
++    assert runner.seen_prompts == ["[You (you)]: q1", "[You (you)]: q2"]
+ 
+ 
+ def test_kb_chat_stamps_the_sender_on_the_user_message():
+diff --git a/tests/api/test_send_markings.py b/tests/api/test_send_markings.py
+index 25a95ea82..b69140e95 100644
+--- a/tests/api/test_send_markings.py
++++ b/tests/api/test_send_markings.py
+@@ -238,6 +238,22 @@ def test_the_model_gets_one_line_per_marking_naming_count_keys_and_path():
+     assert cap.prompt.rstrip().endswith("why?")
+ 
+ 
++def test_the_senders_name_goes_on_their_words_not_on_the_markings_block():
++    """Every message a person wrote reaches the model as `[Name (handle)]: …`.
++    The markings block is the platform's, sent in front of the person's words —
++    so the name goes after it, on what the person said, never on the block."""
++    cap = _Capture()
++    app, spec = _app(cap)
++    client = TestClient(app)
++    iid = register_rca_item(spec)
++
++    client.post(f"/a/rca/items/{iid}/messages", json={"content": "why?", "markings": [FAIL]})
++
++    assert cap.prompt is not None
++    assert not cap.prompt.startswith("[")
++    assert cap.prompt.endswith("\n\n[u]: why?")
++
++
+ def test_the_marking_is_recorded_on_the_persisted_message_but_not_in_its_text():
+     """A reload shows the chip; the text the user typed stays the text."""
+     cap = _Capture()
+diff --git a/tests/api/test_stop_reliability.py b/tests/api/test_stop_reliability.py
+index 3f252340c..aaa1013ca 100644
+--- a/tests/api/test_stop_reliability.py
++++ b/tests/api/test_stop_reliability.py
+@@ -516,7 +516,7 @@ async def test_a_stop_does_not_discard_a_queued_message_through_the_real_send_pa
+         # Bounded: a discarded message never runs, so the regression is a
+         # timeout rather than a test that waits it out.
+         async def answered() -> None:
+-            while "fast" not in runner.seen:
++            while "[u]: fast" not in runner.seen:
+                 await asyncio.sleep(0.01)
+ 
+         await asyncio.wait_for(answered(), 5)
+diff --git a/tests/config/test_loader.py b/tests/config/test_loader.py
+index 6028f0822..8a2dc7d22 100644
+--- a/tests/config/test_loader.py
++++ b/tests/config/test_loader.py
+@@ -956,6 +956,22 @@ def test_observability_llm_log_defaults_enabled():
+     assert s.observability.llm_log.keep_days == 0
+ 
+ 
++def test_telemetry_keeps_14_days_by_default_and_is_settable(tmp_path: Path):
++    """docs/plan-telemetry-retention.md D2/D4: telemetry-event rows older than
++    `keep_days` are purged; 0 keeps everything."""
++    assert load(config_path=None, env={}).observability.telemetry.keep_days == 14
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text(
++        dedent("""
++            observability:
++              telemetry:
++                keep_days: 0
++        """),
++        encoding="utf-8",
++    )
++    assert load(config_path=cfg, env={}).observability.telemetry.keep_days == 0
++
++
+ def test_observability_llm_log_can_be_disabled(tmp_path: Path):
+     """An operator can turn the LLM call log off in config.yaml."""
+     cfg = tmp_path / "config.yaml"
+diff --git a/tests/monitor/test_specstar_monitor.py b/tests/monitor/test_specstar_monitor.py
+index f8c64879e..ab3b870da 100644
+--- a/tests/monitor/test_specstar_monitor.py
++++ b/tests/monitor/test_specstar_monitor.py
+@@ -55,3 +55,27 @@ async def test_live_feed_is_in_memory_fan_out():
+ def test_is_an_imonitor():
+     # drop-in for InMemoryMonitor: same IMonitor interface
+     assert issubclass(SpecstarMonitor, IMonitor)
++
++
++def test_a_restarted_monitor_continues_past_the_largest_seq_after_old_rows_are_removed():
++    """docs/plan-telemetry-retention.md D8: the order key resumed from the ROW
++    COUNT, so once old rows were removed a restarted process handed out seq
++    values the kept rows already held, and `recent(limit=…)` (newest by seq)
++    showed old events instead of the new one."""
++    from specstar import QB
++
++    from workspace_app.monitor import TelemetryEvent
++
++    spec = _spec()
++    m = SpecstarMonitor(spec)
++    for n in range(1, 6):
++        m.record({"kind": "span_end", "n": n})
++    rm = spec.get_resource_manager(TelemetryEvent)
++    oldest = rm.search_resources(QB.all().sort("seq").limit(3).build())
++    for meta in oldest:  # the three oldest go, as a purge would remove them
++        rm.permanently_delete(meta.resource_id)
++
++    restarted = SpecstarMonitor(spec)
++    restarted.record({"kind": "span_end", "n": 6})
++    assert [e["n"] for e in restarted.recent(limit=1)] == [6]
++    assert [e["n"] for e in restarted.recent()] == [4, 5, 6]
+diff --git a/tests/monitor/test_telemetry_purge.py b/tests/monitor/test_telemetry_purge.py
+new file mode 100644
+index 000000000..6c08cd7d0
+--- /dev/null
++++ b/tests/monitor/test_telemetry_purge.py
+@@ -0,0 +1,84 @@
++"""docs/plan-telemetry-retention.md P3: telemetry-event rows older than the
++cutoff are removed permanently, in batches, within a time budget."""
++
++import datetime as dt
++
++import pytest
++from specstar import QB, SpecStar
++
++from workspace_app.monitor import SpecstarMonitor, TelemetryEvent
++from workspace_app.monitor.specstar_impl import purge_telemetry_older_than
++from workspace_app.resources import make_spec
++
++CUTOFF = dt.datetime(2026, 11, 5, tzinfo=dt.UTC)
++
++
++def _spec_with(*ages_days: float) -> tuple[SpecStar, list[str]]:
++    """One row per age, created that many days before CUTOFF (negative = after)."""
++    spec = make_spec(default_user="u")
++    SpecstarMonitor(spec)
++    rm = spec.get_resource_manager(TelemetryEvent)
++    ids = []
++    for i, age in enumerate(ages_days):
++        info = rm.create(
++            TelemetryEvent(kind="span_end", seq=i + 1, payload={"n": i}),
++            now=CUTOFF - dt.timedelta(days=age),
++        )
++        ids.append(info.resource_id)
++    return spec, ids
++
++
++def _left(spec: SpecStar) -> list[int]:
++    rm = spec.get_resource_manager(TelemetryEvent)
++    return sorted(r.data.seq for r in rm.list_resources(QB.all().build()))  # ty: ignore[unresolved-attribute]
++
++
++def test_rows_older_than_the_cutoff_go_and_the_rest_stay():
++    spec, _ = _spec_with(30, 15, 0, -1)
++    assert purge_telemetry_older_than(spec, CUTOFF).removed == 2
++    assert _left(spec) == [3, 4]  # the row exactly at the cutoff stays
++
++
++def test_they_are_removed_permanently_not_soft_deleted():
++    """A soft delete keeps the row and its revisions: no space comes back."""
++    spec, ids = _spec_with(30)
++    purge_telemetry_older_than(spec, CUTOFF)
++    rm = spec.get_resource_manager(TelemetryEvent)
++    with pytest.raises(Exception):  # noqa: B017 — any "no such resource" will do
++        rm.restore(ids[0])
++
++
++def test_a_backlog_larger_than_one_batch_is_drained():
++    spec, _ = _spec_with(9, 8, 7, 6, 5)
++    result = purge_telemetry_older_than(spec, CUTOFF, batch=2)
++    assert (result.removed, result.more) == (5, False)
++    assert _left(spec) == []
++
++
++def test_it_stops_when_the_time_budget_is_spent_and_the_next_pass_carries_on():
++    # Written NEWEST first (review round 1): the in-memory backend lists rows
++    # in insertion order, so oldest-first insertion made "the oldest went first"
++    # hold with no sort at all.
++    spec, _ = _spec_with(5, 6, 7, 8, 9)
++    ticks = iter([0.0, 0.0, 100.0])  # start, after batch 1, after batch 2
++    clock = lambda: next(ticks, 100.0)  # noqa: E731
++    result = purge_telemetry_older_than(spec, CUTOFF, batch=2, budget_s=50, clock=clock)
++    assert (result.removed, result.more) == (4, True)  # stopped on the budget
++    assert _left(spec) == [1]  # the youngest (5 days) is the one left
++    assert purge_telemetry_older_than(spec, CUTOFF, batch=2).removed == 1
++
++
++def test_a_short_batch_after_the_budget_says_nothing_remains():
++    """Review round 2: a pass whose budget ran out on the batch that also
++    emptied the backlog has nothing left — `more` is about rows, not time."""
++    spec, _ = _spec_with(9, 8, 7)
++    ticks = iter([0.0, 100.0])  # start, after batch 1 (full), …
++    clock = lambda: next(ticks, 100.0)  # noqa: E731
++    result = purge_telemetry_older_than(spec, CUTOFF, batch=2, budget_s=50, clock=clock)
++    assert (result.removed, result.more) == (2, True)  # stopped after a full batch
++    result = purge_telemetry_older_than(spec, CUTOFF, batch=2, budget_s=0, clock=lambda: 100.0)
++    assert (result.removed, result.more) == (1, False)  # budget long gone, batch short
++
++
++def test_a_spec_without_telemetry_has_nothing_to_purge():
++    assert purge_telemetry_older_than(make_spec(default_user="u"), CUTOFF).removed == 0
+diff --git a/tests/monitor/test_telemetry_purge_job.py b/tests/monitor/test_telemetry_purge_job.py
+new file mode 100644
+index 000000000..e9e9f8977
+--- /dev/null
++++ b/tests/monitor/test_telemetry_purge_job.py
+@@ -0,0 +1,157 @@
++"""docs/plan-telemetry-retention.md P4 (D5): the purge runs as a job — a third
++payload kind on the blob-gc coordinator, asked for by a pure producer behind a
++`ScanLease`, run wherever the `blob-gc` JobType is consumed. Through
++`create_app`, so the wiring is the one production uses."""
++
++from __future__ import annotations
++
++import asyncio
++import datetime as dt
++
++from specstar import QB
++from specstar.types import TaskStatus
++
++from workspace_app.api import ScriptedAgentRunner, create_app
++from workspace_app.filestore.blob_gc import BlobGcCoordinator, BlobGcJob
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.monitor import SpecstarMonitor, TelemetryEvent
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ..api._client import TestClient
++
++_ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
++_DONE = [TaskStatus.COMPLETED, TaskStatus.FAILED]
++
++
++def _jobs(spec, statuses) -> list[BlobGcJob]:
++    rm = spec.get_resource_manager(BlobGcJob)
++    return [r.data for r in rm.list_resources(QB["status"].in_(statuses).build())]
++
++
++async def _until(pred, budget_s: float = 5.0) -> bool:
++    for _ in range(int(budget_s / 0.05)):
++        if pred():
++            return True
++        await asyncio.sleep(0.05)
++    return pred()
++
++
++def _app(spec, **kw):
++    return TestClient(
++        create_app(
++            spec=spec,
++            sandbox=MockSandbox(),
++            filestore=MemoryFileStore(),
++            runner=ScriptedAgentRunner([]),
++            get_user_id=lambda: "alice",
++            gc_interval=None,
++            monitor=SpecstarMonitor(spec),
++            **kw,
++        )
++    )
++
++
++def _seqs(spec) -> list[int]:
++    rm = spec.get_resource_manager(TelemetryEvent)
++    return sorted(r.data.seq for r in rm.list_resources(QB.all().build()))
++
++
++def test_the_job_removes_rows_older_than_keep_days_and_keeps_the_rest():
++    spec = make_spec(default_user="alice")
++    with _app(spec) as client:
++        rm = spec.get_resource_manager(TelemetryEvent)
++        now = dt.datetime.now(dt.UTC)
++        for seq, age in ((1, 20), (2, 15), (3, 13), (4, 0)):
++            rm.create(TelemetryEvent(kind="span_end", seq=seq), now=now - dt.timedelta(days=age))
++
++        client.app.state.blob_gc_coordinator.enqueue_telemetry_purge(keep_days=14)
++        assert asyncio.run(_until(lambda: len(_jobs(spec, _DONE)) == 1))
++        assert [j.status for j in _jobs(spec, _DONE)] == [TaskStatus.COMPLETED]
++        assert _seqs(spec) == [3, 4]
++
++
++def test_the_producer_asks_at_its_first_tick_with_the_configured_days():
++    """A rollout starts draining at once; a pure producer only leaves the ask."""
++    spec = make_spec(default_user="alice")
++    with _app(spec, telemetry_keep_days=14, run_consumers=False):
++        assert asyncio.run(_until(lambda: bool(_jobs(spec, _ACTIVE))))
++        (job,) = _jobs(spec, _ACTIVE)
++        assert (job.payload.kind, job.payload.keep_days) == ("telemetry-purge", 14)
++
++
++def test_a_pod_whose_window_another_pod_already_asked_in_does_not_ask():
++    """One ask per window across pods: the `ScanLease` on the shared ledger."""
++    from workspace_app.api.lifecycle import TELEMETRY_PURGE_INTERVAL_S
++    from workspace_app.workflow.triggers import ScanLease, SpecstarTriggerStore
++
++    spec = make_spec(default_user="alice")
++    client = _app(spec, telemetry_keep_days=14, run_consumers=False)  # models registered,
++    lease = ScanLease(  # lifespan (and so the sweeper) not started yet
++        SpecstarTriggerStore(spec), "telemetry-purge", interval_s=TELEMETRY_PURGE_INTERVAL_S
++    )
++    assert lease.claim()  # another pod took this window
++    with client:
++        assert not asyncio.run(_until(lambda: bool(_jobs(spec, _ACTIVE)), budget_s=0.5))
++
++
++def test_the_producer_is_off_at_zero():
++    spec = make_spec(default_user="alice")
++    with _app(spec, telemetry_keep_days=0, run_consumers=False):
++        assert not asyncio.run(_until(lambda: bool(_jobs(spec, _ACTIVE)), budget_s=0.5))
++
++
++async def test_a_job_that_says_zero_days_removes_nothing():
++    """0 means keep everything — never "older than now", which is every row."""
++    spec = make_spec(default_user="alice")
++    SpecstarMonitor(spec).record({"kind": "span_end"})
++    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
++    c.enqueue_telemetry_purge(keep_days=0)
++    await c.aclose()
++    assert [j.status for j in _jobs(spec, _DONE)] == [TaskStatus.COMPLETED]
++    assert _seqs(spec) == [1]
++
++
++async def test_the_purge_line_reaches_stdout_although_the_worker_configures_no_logging(
++    capsys, monkeypatch
++):  # noqa: ANN001
++    """Review round 1 (#1037): the migrations entry tells the operator to look
++    for this line in the blob-gc worker's log. Nothing in the worker configures
++    logging, so an INFO record fell to the stdlib's last-resort handler and was
++    dropped — the check would find nothing on a healthy deploy
++    (observability/stdout_log.py)."""
++    import logging
++
++    from workspace_app.filestore import blob_gc
++    from workspace_app.observability.stdout_log import OWN_HANDLER
++
++    def own() -> list[logging.Handler]:
++        return [h for h in blob_gc.logger.handlers if getattr(h, OWN_HANDLER, False)]
++
++    for h in own():
++        blob_gc.logger.removeHandler(h)  # rebind to this test's stdout
++    root = logging.getLogger()
++    monkeypatch.setattr(root, "level", logging.WARNING)  # what production has
++    try:
++        spec = make_spec(default_user="alice")
++        SpecstarMonitor(spec)
++        c = BlobGcCoordinator(spec, t1="1h", t2="24h")
++        c.enqueue_telemetry_purge(keep_days=14)
++        await c.aclose()
++        assert "blob-gc: telemetry purge removed 0 rows older than" in capsys.readouterr().out
++    finally:
++        # Review round 2: the handler is bound to capsys's stream, closed after
++        # this test — left behind, every later blob-gc INFO line raised
++        # "I/O operation on closed file". The next coordinator installs afresh.
++        for h in own():
++            blob_gc.logger.removeHandler(h)
++
++
++def test_a_purge_ask_is_not_swallowed_by_another_kind_in_flight():
++    spec = make_spec()
++    c = BlobGcCoordinator(spec, t1="1h", t2="24h")
++    c.enqueue_reconcile()
++    c.enqueue_telemetry_purge(keep_days=14)
++    c.enqueue_telemetry_purge(keep_days=14)
++    kinds = sorted(j.payload.kind for j in _jobs(spec, _ACTIVE))
++    assert kinds == ["reconcile", "telemetry-purge"]
+diff --git a/tests/test_telemetry_wiring.py b/tests/test_telemetry_wiring.py
+new file mode 100644
+index 000000000..29cd911ca
+--- /dev/null
++++ b/tests/test_telemetry_wiring.py
+@@ -0,0 +1,53 @@
++"""docs/plan-telemetry-retention.md: `observability.telemetry.keep_days`
++reaches `create_app` from the real composition root — a setting the deploy
++reads but never passes is a knob that silently does nothing."""
++
++from __future__ import annotations
++
++from textwrap import dedent
++
++import pytest
++
++from workspace_app.config.loader import load
++
++
++class _Stop(Exception):
++    pass
++
++
++@pytest.mark.parametrize(
++    ("written", "passed"),
++    [("", 14), ("observability:\n  telemetry:\n    keep_days: 3\n", 3)],
++)
++def test_keep_days_reaches_create_app(tmp_path, monkeypatch, written: str, passed: int) -> None:  # noqa: ANN001
++    import workspace_app.__main__ as main_mod
++
++    cfg = tmp_path / "config.yaml"
++    cfg.write_text(
++        dedent(f"""
++            server:
++              run_consumers: false
++            filestore:
++              kind: specstar
++            sandbox:
++              root: {tmp_path / "sandbox"}
++            skill_hub:
++              git_root: {tmp_path / "skill-hub-git"}
++            kb:
++              embedder:
++                model: ""
++        """)
++        + written,
++        encoding="utf-8",
++    )
++    seen: dict = {}
++
++    def spy(**kwargs):  # noqa: ANN003, ANN202
++        seen.update(kwargs)
++        raise _Stop
++
++    monkeypatch.setattr(main_mod, "PACKAGES", {})
++    monkeypatch.setattr(main_mod, "create_app", spy)
++    with pytest.raises(_Stop):
++        main_mod.build_app(load(config_path=cfg, env={}), config_dir=None)
++    assert seen["telemetry_keep_days"] == passed
+diff --git a/tests/test_worker.py b/tests/test_worker.py
+index 8b3745aab..3764a2412 100644
+--- a/tests/test_worker.py
++++ b/tests/test_worker.py
+@@ -277,7 +277,10 @@ def test_the_blob_gc_worker_holds_every_model_the_apis_ask_names(tmp_path, monke
+     rm = oracle.get_resource_manager(BlobGcJob)
+ 
+     def _ask():
+-        return [r.data for r in rm.list_resources(QB.all().build())]
++        # The reconcile's ask — other kinds share the queue and ask at boot
++        # (docs/plan-telemetry-retention.md's purge, on by default).
++        jobs = [r.data for r in rm.list_resources(QB.all().build())]
++        return [j for j in jobs if j.payload.kind == "reconcile"]
+ 
+     async def _until_asked():
+         for _ in range(60):
+diff --git a/tests/users/test_labels.py b/tests/users/test_labels.py
+index 38df8151d..8b0b617c7 100644
+--- a/tests/users/test_labels.py
++++ b/tests/users/test_labels.py
+@@ -1,7 +1,7 @@
+ """#242 — rendering a person into a label the LLM can read."""
+ 
+ from workspace_app.users import User, display_handle, speaker_label
+-from workspace_app.users.labels import speaker_note
++from workspace_app.users.labels import attributed, speaker_note
+ 
+ 
+ def test_handle_is_the_email_local_part():
+@@ -44,3 +44,16 @@ def test_speaker_note_omits_section_when_absent():
+ 
+ def test_speaker_note_is_empty_without_a_resolved_speaker():
+     assert speaker_note(None) == ""
++
++
++def test_speaker_note_says_every_user_message_carries_its_sender():
++    """The note describes what the model is handed: the message being answered
++    is prefixed too, so the note must not say only EARLIER ones are."""
++    note = speaker_note(User(id="u1", name="Alice", email="alice@acme.test"))
++    assert "each earlier user message" not in note
++    assert "each message a person wrote is prefixed" in note
++
++
++def test_attributed_is_the_one_spelling_of_the_prefix():
++    assert attributed("Ann (ann)", "hi") == "[Ann (ann)]: hi"
++    assert attributed("", "hi") == "hi"
+diff --git a/web/src/components/CollapsedFeed.test.tsx b/web/src/components/CollapsedFeed.test.tsx
+new file mode 100644
+index 000000000..be3ed3fcd
+--- /dev/null
++++ b/web/src/components/CollapsedFeed.test.tsx
+@@ -0,0 +1,202 @@
++// @vitest-environment happy-dom
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { useEffect, useRef } from "react";
++import { afterEach, describe, expect, it } from "vitest";
++
++import { LocaleProvider, setStoredLocale } from "../lib/i18n";
++import { CollapsedFeed } from "./CollapsedFeed";
++
++/** docs/plan-chat-collapse-middle.md — a feed of `n` numbered rows. */
++function Feed({ n, chat = "c1" }: { n: number; chat?: string }) {
++  const ref = useRef<HTMLDivElement>(null);
++  const rows = Array.from({ length: n }, (_, i) => `row ${i}`);
++  return (
++    <div ref={ref} data-testid="scroller">
++      <CollapsedFeed
++        entries={rows}
++        resetKey={chat}
++        scrollRef={ref}
++        renderRow={(r, i) => (
++          <p key={i} data-testid="row" data-index={i}>
++            {r}
++          </p>
++        )}
++      />
++    </div>
++  );
++}
++
++afterEach(() => {
++  cleanup();
++  localStorage.clear();
++});
++
++const drawn = () => screen.queryAllByTestId("row").map((r) => Number(r.dataset.index));
++
++describe("CollapsedFeed", () => {
++  it("draws every row, with no bar, when the feed is short (D1)", () => {
++    render(<Feed n={1100} />);
++    expect(drawn()).toHaveLength(1100);
++    expect(screen.queryByRole("button", { name: /再顯示/ })).toBeNull();
++  });
++
++  it("draws the first 100 and the newest 1000 and says how many are hidden (D1)", () => {
++    render(<Feed n={5000} />);
++    const rows = drawn();
++    expect(rows).toHaveLength(1100);
++    expect(rows.slice(0, 100)).toEqual(Array.from({ length: 100 }, (_, i) => i));
++    expect(rows.slice(100)).toEqual(Array.from({ length: 1000 }, (_, i) => 4000 + i));
++    expect(screen.getByText("中間還有 3900 則未顯示")).toBeTruthy();
++  });
++
++  it("keeps each row's place in the whole feed, so actions that find a row by index still work (D7)", () => {
++    render(<Feed n={5000} />);
++    const last = screen.getAllByTestId("row").at(-1);
++    expect(last?.textContent).toBe("row 4999");
++    expect(last?.dataset.index).toBe("4999");
++  });
++
++  it("↓ continues the top part downward by 1000 (D2/D3)", () => {
++    render(<Feed n={5000} />);
++    fireEvent.click(screen.getByRole("button", { name: "↓ 再顯示接下來的 1000 則" }));
++    const rows = drawn();
++    expect(rows.slice(0, 1100)).toEqual(Array.from({ length: 1100 }, (_, i) => i));
++    expect(rows[1100]).toBe(4000);
++    expect(screen.getByText("中間還有 2900 則未顯示")).toBeTruthy();
++  });
++
++  it("↑ continues the bottom part upward by 1000 (D2/D3)", () => {
++    render(<Feed n={5000} />);
++    fireEvent.click(screen.getByRole("button", { name: "↑ 再顯示更早的 1000 則" }));
++    const rows = drawn();
++    expect(rows[100]).toBe(3000);
++    expect(rows).toHaveLength(2100);
++    expect(screen.getByText("中間還有 2900 則未顯示")).toBeTruthy();
++  });
++
++  it("offers one 顯示其餘 button once no more than 1000 are hidden — a direction would change nothing (GitHub's expand-all)", () => {
++    render(<Feed n={1500} />);
++    expect(screen.queryByRole("button", { name: /↓|↑/ })).toBeNull();
++    fireEvent.click(screen.getByRole("button", { name: "顯示其餘 400 則" }));
++    expect(drawn()).toHaveLength(1500);
++    expect(screen.queryByText(/未顯示/)).toBeNull();
++  });
++
++  it("stays fully open once everything was shown: a new message does not bring the bar back", () => {
++    const { rerender } = render(<Feed n={1500} />);
++    fireEvent.click(screen.getByRole("button", { name: "顯示其餘 400 則" }));
++    rerender(<Feed n={1501} />);
++    expect(drawn()).toHaveLength(1501);
++    expect(screen.queryByText(/未顯示/)).toBeNull();
++  });
++
++  it("speaks the reader's language", () => {
++    setStoredLocale("en");
++    render(
++      <LocaleProvider>
++        <Feed n={5000} />
++      </LocaleProvider>,
++    );
++    expect(screen.getByText("Hidden: 3900")).toBeTruthy();
++    expect(screen.getByRole("button", { name: "↓ Show the next 1000" })).toBeTruthy();
++    expect(screen.getByRole("button", { name: "↑ Show 1000 earlier" })).toBeTruthy();
++    expect(screen.getByRole("group", { name: "Collapsed rows" })).toBeTruthy();
++  });
++
++  it("draws both expand controls as the house button, not as bare text", () => {
++    // `className="btn"` alone has no look: the shape comes from data-variant /
++    // data-size (styles/base.css), which a real browser showed missing.
++    render(<Feed n={5000} />);
++    for (const b of screen.getAllByRole("button", { name: /顯示/ })) {
++      expect(b.className).toBe("btn");
++      expect(b.dataset.variant).toBe("secondary");
++      expect(b.dataset.size).toBe("sm");
++    }
++  });
++
++  it("starts over at 100 / 1000 in another chat (D6)", () => {
++    const { rerender } = render(<Feed n={5000} />);
++    fireEvent.click(screen.getByRole("button", { name: "↓ 再顯示接下來的 1000 則" }));
++    expect(drawn()).toHaveLength(2100);
++    rerender(<Feed n={5000} chat="c2" />);
++    expect(drawn()).toHaveLength(1100);
++  });
++});
++
++describe("CollapsedFeed keeps the reader's place (D4)", () => {
++  /** happy-dom has no layout: give the scroller a height that grows with its rows. */
++  function withLayout(rowPx: number) {
++    const el = screen.getByTestId("scroller");
++    Object.defineProperty(el, "scrollHeight", {
++      configurable: true,
++      get: () => el.querySelectorAll("[data-testid=row]").length * rowPx,
++    });
++    return el;
++  }
++
++  it("↑ shifts the scroll by the height it added above the bottom part", () => {
++    render(<Feed n={5000} />);
++    const el = withLayout(10);
++    el.scrollTop = 1234;
++    fireEvent.click(screen.getByRole("button", { name: "↑ 再顯示更早的 1000 則" }));
++    expect(el.scrollTop).toBe(1234 + 1000 * 10);
++  });
++
++  it("顯示其餘 keeps the bottom part where it was, like ↑", () => {
++    render(<Feed n={1500} />);
++    const el = withLayout(10);
++    el.scrollTop = 1234;
++    fireEvent.click(screen.getByRole("button", { name: "顯示其餘 400 則" }));
++    expect(el.scrollTop).toBe(1234 + 400 * 10);
++  });
++
++  it("↓ leaves the scroll where it was: the top part stays put", () => {
++    render(<Feed n={5000} />);
++    const el = withLayout(10);
++    el.scrollTop = 1234;
++    fireEvent.click(screen.getByRole("button", { name: "↓ 再顯示接下來的 1000 則" }));
++    expect(el.scrollTop).toBe(1234);
++  });
++});
++
++describe("CollapsedFeed keeps rows mounted as they cross the bar", () => {
++  /** A row that counts how often it is mounted — a remount loses an opened tool
++   * card and re-parses its markdown. */
++  const mounts: number[] = [];
++  function Row({ i }: { i: number }) {
++    useEffect(() => {
++      mounts.push(i);
++    }, [i]);
++    return <p data-testid="row" data-index={i} />;
++  }
++  function Counted({ n }: { n: number }) {
++    const ref = useRef<HTMLDivElement>(null);
++    return (
++      <div ref={ref}>
++        <CollapsedFeed
++          entries={Array.from({ length: n }, (_, i) => i)}
++          resetKey="c1"
++          scrollRef={ref}
++          renderRow={(r, i) => <Row key={i} i={r} />}
++        />
++      </div>
++    );
++  }
++
++  it.each([
++    ["the feed grows past 1100", 1100, 1101, 1],
++    ["an undo brings it back under (rows 100–101 were hidden)", 1102, 1050, 2],
++  ])("mounts only new rows when %s", (_, from, to, fresh) => {
++    const { rerender } = render(<Counted n={from} />);
++    mounts.length = 0;
++    rerender(<Counted n={to} />);
++    expect(mounts).toHaveLength(fresh);
++  });
++
++  it("mounts only the revealed rows when the last press empties the middle", () => {
++    render(<Counted n={1500} />);
++    mounts.length = 0;
++    fireEvent.click(screen.getByRole("button", { name: "顯示其餘 400 則" }));
++    expect(mounts).toHaveLength(400);
++  });
++});
+diff --git a/web/src/components/CollapsedFeed.tsx b/web/src/components/CollapsedFeed.tsx
+new file mode 100644
+index 000000000..b3b3cff24
+--- /dev/null
++++ b/web/src/components/CollapsedFeed.tsx
+@@ -0,0 +1,135 @@
++/**
++ * A long chat feed with its middle collapsed (docs/plan-chat-collapse-middle.md).
++ *
++ * Draws the first `FEED_HEAD` and the last `FEED_TAIL` rows; between them, one
++ * bar with an expand button at each end — the GitHub PR-timeline / diff shape:
++ * "↓" continues the top part downward, "↑" continues the bottom part upward,
++ * `FEED_STEP` rows a press; once no more than that is left, one "show the rest"
++ * (a direction would change nothing). It decides only WHICH rows reach the DOM
++ * — `renderRow` still gets each row's index in the whole feed, so the actions
++ * that find a row by index (replay, undo, report) are unchanged.
++ */
++
++import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from "react";
++
++import { FEED_HEAD, FEED_STEP, FEED_TAIL, feedWindow } from "../lib/collapsedFeed";
++import { useT } from "../lib/i18n";
++import { pxToRem } from "../lib/pxToRem";
++import { Btn } from "./Btn";
++
++/** `all`: everything was shown once, so it stays shown — a new message must not
++ * bring the bar back into a feed the reader opened whole. */
++type Shown = { key: string; head: number; tail: number; all: boolean };
++
++/** Where the scroll stood before an expand, to put the reader back (D4). */
++type Anchor = { scrollTop: number; scrollHeight: number; grewAbove: boolean };
++
++const initial = (key: string): Shown => ({ key, head: FEED_HEAD, tail: FEED_TAIL, all: false });
++
++export function CollapsedFeed<T>({
++  entries,
++  resetKey,
++  scrollRef,
++  renderRow,
++}: {
++  entries: readonly T[];
++  /** The chat this feed shows: another one starts over at the defaults (D6). */
++  resetKey: string;
++  /** The element that scrolls the feed. */
++  scrollRef: RefObject<HTMLElement | null>;
++  /** One row, keyed by its index — the key is what keeps a row mounted as it
++   * moves between the top and the bottom part. */
++  renderRow: (entry: T, index: number) => ReactNode;
++}) {
++  const t = useT();
++  const [shown, setShown] = useState<Shown>(() => initial(resetKey));
++  // Another chat: back to the defaults, in this same render (React's
++  // "adjusting state when a prop changes"), so the long one never draws whole.
++  const current = shown.key === resetKey ? shown : initial(resetKey);
++  if (current !== shown) setShown(current);
++
++  const anchor = useRef<Anchor | null>(null);
++  const win = current.all
++    ? feedWindow(entries.length, entries.length, 0)
++    : feedWindow(entries.length, current.head, current.tail);
++  const step = Math.min(FEED_STEP, win.hidden);
++
++  const expand = (side: "head" | "tail" | "all") => {
++    const el = scrollRef.current;
++    if (el) {
++      anchor.current = {
++        scrollTop: el.scrollTop,
++        scrollHeight: el.scrollHeight,
++        // ↓ inserts its rows ABOVE the bar, below the top part: keeping
++        // `scrollTop` keeps the top part where it was. ↑ and "the rest" insert
++        // theirs below the bar, above the bottom part — the part a reader who
++        // came up from the newest messages is in — so the scroll moves by what
++        // was added and the bottom part stays put.
++        grewAbove: side !== "head",
++      };
++    }
++    setShown(
++      side === "all" ? { ...current, all: true } : { ...current, [side]: current[side] + step },
++    );
++  };
++
++  // Before paint, so the reader never sees the jump. Restores the position
++  // itself rather than leaving it to the browser's scroll anchoring: measured in
++  // Chromium on a 20000-row chat while building this (PR #1039), without it an
++  // ↑ press pushed the row being read down by the whole height of the rows it
++  // added (~129k px for 1000 rows).
++  useLayoutEffect(() => {
++    const a = anchor.current;
++    const el = scrollRef.current;
++    if (!a || !el) return;
++    anchor.current = null;
++    el.scrollTop = a.grewAbove ? a.scrollTop + (el.scrollHeight - a.scrollHeight) : a.scrollTop;
++  });
++
++  // ONE keyed array, bar included: React matches keys within an array, so a row
++  // crossing from the bottom part to the top part (the feed growing past the
++  // threshold, an undo, the last expand) keeps its mount — two arrays remounted
++  // ~1000 rows there, re-parsing their markdown and closing opened tool cards.
++  const rows: ReactNode[] = entries.slice(0, win.headEnd).map((e, i) => renderRow(e, i));
++  if (win.hidden > 0) {
++    rows.push(
++      <div
++        key="collapsed-feed-bar"
++        role="group"
++        aria-label={t("feed.collapsed.label")}
++        style={{
++          display: "flex",
++          flexDirection: "column",
++          alignItems: "center",
++          gap: 6,
++          padding: "10px 0",
++          borderTop: "1px dashed var(--text-paper-d)",
++          borderBottom: "1px dashed var(--text-paper-d)",
++          color: "var(--text-paper-d)",
++          fontSize: pxToRem(13),
++        }}
++      >
++        {win.hidden > FEED_STEP ? (
++          <>
++            <Btn size="sm" onClick={() => expand("head")}>
++              {t("feed.collapsed.next", { n: step })}
++            </Btn>
++            <span>{t("feed.collapsed.hidden", { n: win.hidden })}</span>
++            <Btn size="sm" onClick={() => expand("tail")}>
++              {t("feed.collapsed.earlier", { n: step })}
++            </Btn>
++          </>
++        ) : (
++          <>
++            <span>{t("feed.collapsed.hidden", { n: win.hidden })}</span>
++            <Btn size="sm" onClick={() => expand("all")}>
++              {t("feed.collapsed.rest", { n: win.hidden })}
++            </Btn>
++          </>
++        )}
++      </div>,
++    );
++  }
++  entries.slice(win.tailStart).forEach((e, j) => rows.push(renderRow(e, win.tailStart + j)));
++  return <>{rows}</>;
++}
+diff --git a/web/src/lib/collapsedFeed.test.ts b/web/src/lib/collapsedFeed.test.ts
+new file mode 100644
+index 000000000..a0ba1f138
+--- /dev/null
++++ b/web/src/lib/collapsedFeed.test.ts
+@@ -0,0 +1,29 @@
++import { describe, expect, it } from "vitest";
++
++import { FEED_HEAD, FEED_STEP, FEED_TAIL, feedWindow } from "./collapsedFeed";
++
++describe("feedWindow (docs/plan-chat-collapse-middle.md D1/D5)", () => {
++  it("defaults to the first 100 and the newest 1000", () => {
++    expect([FEED_HEAD, FEED_TAIL, FEED_STEP]).toEqual([100, 1000, 1000]);
++  });
++
++  it("draws everything when the head and tail meet", () => {
++    expect(feedWindow(1100, 100, 1000)).toEqual({ headEnd: 1100, tailStart: 1100, hidden: 0 });
++    expect(feedWindow(5, 100, 1000)).toEqual({ headEnd: 5, tailStart: 5, hidden: 0 });
++    expect(feedWindow(0, 100, 1000)).toEqual({ headEnd: 0, tailStart: 0, hidden: 0 });
++  });
++
++  it("hides what lies between the head and the tail", () => {
++    expect(feedWindow(1101, 100, 1000)).toEqual({ headEnd: 100, tailStart: 101, hidden: 1 });
++    expect(feedWindow(5000, 100, 1000)).toEqual({ headEnd: 100, tailStart: 4000, hidden: 3900 });
++  });
++
++  it("counts the tail from the end, so a new message pushes its oldest row into the gap", () => {
++    expect(feedWindow(5001, 100, 1000)).toEqual({ headEnd: 100, tailStart: 4001, hidden: 3901 });
++  });
++
++  it("grows each side by what was expanded", () => {
++    expect(feedWindow(5000, 1100, 1000)).toEqual({ headEnd: 1100, tailStart: 4000, hidden: 2900 });
++    expect(feedWindow(5000, 100, 2000)).toEqual({ headEnd: 100, tailStart: 3000, hidden: 2900 });
++  });
++});
+diff --git a/web/src/lib/collapsedFeed.ts b/web/src/lib/collapsedFeed.ts
+new file mode 100644
+index 000000000..bdf637804
+--- /dev/null
++++ b/web/src/lib/collapsedFeed.ts
+@@ -0,0 +1,29 @@
++/**
++ * Which rows of a long chat feed are drawn (docs/plan-chat-collapse-middle.md).
++ *
++ * A feed draws its first `head` rows and its last `tail` rows; what lies between
++ * is collapsed behind one bar. Both are counts, not indices: the first load, a
++ * reconnect and an undo each rebuild the whole log, so an index taken when the
++ * feed opened would not survive them (D5).
++ */
++
++/** Rows drawn from the top by default (D1). */
++export const FEED_HEAD = 100;
++/** Rows drawn from the bottom by default (D1). */
++export const FEED_TAIL = 1000;
++/** Rows one press of either expand button reveals (D2). */
++export const FEED_STEP = 1000;
++
++export type FeedWindow = {
++  /** Rows `[0, headEnd)` are drawn above the bar. */
++  headEnd: number;
++  /** Rows `[tailStart, total)` are drawn below it. */
++  tailStart: number;
++  /** Rows behind the bar; 0 means there is no bar. */
++  hidden: number;
++};
++
++export function feedWindow(total: number, head: number, tail: number): FeedWindow {
++  if (head + tail >= total) return { headEnd: total, tailStart: total, hidden: 0 };
++  return { headEnd: head, tailStart: total - tail, hidden: total - head - tail };
++}
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index ecd947520..a3b08e9cc 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -1848,6 +1848,15 @@ export const messages = {
+   // named after the command in both locales. "整理成摘要" read as a request
+   // to summarise something, which is not what it does to the person pressing it.
+   "chat.compact": { "zh-TW": "compact", en: "compact" },
++  // docs/plan-chat-collapse-middle.md: the bar a very long feed folds its
++  // middle behind — a button at each end, 1000 rows a press; one "the rest"
++  // button once no more than that is hidden. Also folds the bottom panel's
++  // tool output, so the words say "rows", not "messages".
++  "feed.collapsed.label": { "zh-TW": "收起的部分", en: "Collapsed rows" },
++  "feed.collapsed.hidden": { "zh-TW": "中間還有 {n} 則未顯示", en: "Hidden: {n}" },
++  "feed.collapsed.next": { "zh-TW": "↓ 再顯示接下來的 {n} 則", en: "↓ Show the next {n}" },
++  "feed.collapsed.earlier": { "zh-TW": "↑ 再顯示更早的 {n} 則", en: "↑ Show {n} earlier" },
++  "feed.collapsed.rest": { "zh-TW": "顯示其餘 {n} 則", en: "Show the remaining {n}" },
+   "chat.compact.pending": { "zh-TW": "compacting…", en: "compacting…" },
+   // The header's "⋯" when its actions no longer fit beside the title.
+   "chat.more": { "zh-TW": "更多", en: "More" },
+diff --git a/web/src/pages/investigation/AgentPanel.longChat.test.tsx b/web/src/pages/investigation/AgentPanel.longChat.test.tsx
+index 849722c0a..e16e5a3f7 100644
+--- a/web/src/pages/investigation/AgentPanel.longChat.test.tsx
++++ b/web/src/pages/investigation/AgentPanel.longChat.test.tsx
+@@ -181,3 +181,25 @@ describe("a streamed token in a long chat", () => {
+   });
+ });
+ 
++
++describe("a very long chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
++  it("draws the first 100 and the newest 1000 rows, and the bar between them", () => {
++    const entries: AgentEntry[] = [];
++    for (let i = 0; i < 1500; i++) entries.push(answer(`row ${i}`));
++    const log = { ...({} as AgentLog), entries, streaming: false } as AgentLog;
++    const client = makeTestQueryClient();
++    const wrapper = ({ children }: { children: ReactNode }) => (
++      <QueryWrap client={client}>
++        <MemoryRouter>{children}</MemoryRouter>
++      </QueryWrap>
++    );
++    drawn.length = 0;
++    const view = render(panel(agentWith(log)), { wrapper });
++    expect(new Set(drawn).size).toBe(1100);
++    expect(drawn).toContain("row 99");
++    expect(drawn).not.toContain("row 100");
++    expect(drawn).not.toContain("row 499");
++    expect(drawn).toContain("row 500");
++    expect(view.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/pages/investigation/AgentPanel.tsx b/web/src/pages/investigation/AgentPanel.tsx
+index 004d6bb58..c5c859aaf 100644
+--- a/web/src/pages/investigation/AgentPanel.tsx
++++ b/web/src/pages/investigation/AgentPanel.tsx
+@@ -13,6 +13,7 @@ import { kbApi } from "../../api/kb";
+ import { qk } from "../../api/queryKeys";
+ import type { ChatVideoQueued } from "../../api/chatVideo";
+ import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
++import { CollapsedFeed } from "../../components/CollapsedFeed";
+ import { ExportDialog } from "../../components/ExportDialog";
+ import { VideoProgress } from "../../components/VideoProgress";
+ import { HealthDot } from "../../components/HealthDot";
+@@ -904,18 +905,25 @@ export function AgentPanel({
+           </div>
+         )}
+         <ChatItemProvider value={chatItem}>
+-        {log.entries.map((e, i) => (
+-          <ChatFeedRow
+-            key={i}
+-            entry={e}
+-            index={i}
+-            settled={!log.streaming}
+-            me={me}
+-            answeredQuestions={answeredQuestions}
+-            actions={rowActions}
+-            fileUrl={rowFileUrl}
+-          />
+-        ))}
++        {/* docs/plan-chat-collapse-middle.md: a very long chat draws its first
++            and newest rows; the middle opens 1000 at a time. */}
++        <CollapsedFeed
++          entries={log.entries}
++          resetKey={`${investigationId}/${chatId ?? ""}`}
++          scrollRef={chatScrollRef}
++          renderRow={(e, i) => (
++            <ChatFeedRow
++              key={i}
++              entry={e}
++              index={i}
++              settled={!log.streaming}
++              me={me}
++              answeredQuestions={answeredQuestions}
++              actions={rowActions}
++              fileUrl={rowFileUrl}
++            />
++          )}
++        />
+         </ChatItemProvider>
+         <ConnectionNotice connection={connection} />
+         <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} alive={turnAlive} />
+diff --git a/web/src/pages/investigation/BottomPanel.longChat.test.tsx b/web/src/pages/investigation/BottomPanel.longChat.test.tsx
+new file mode 100644
+index 000000000..8b60b5843
+--- /dev/null
++++ b/web/src/pages/investigation/BottomPanel.longChat.test.tsx
+@@ -0,0 +1,70 @@
++// @vitest-environment happy-dom
++/**
++ * The bottom panel's transcripts fold a very long chat's middle the way the chat
++ * does (docs/plan-chat-collapse-middle.md): a pinned "Agent log" tab drew every
++ * entry in full, so opening a long chat with it pinned was as slow as before.
++ */
++import "@testing-library/jest-dom/vitest";
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++import { BottomPanel } from "./WorkspaceShell";
++
++const N = 1500;
++const entries = Array.from({ length: N }, (_, i) => ({
++  kind: "tool_call",
++  call: { id: `c${i}`, name: `tool${i}`, args: {}, status: "done", output: `out ${i}` },
++}));
++
++vi.mock("../../hooks/useAgent", () => ({
++  useAgent: () => ({ investigationId: "inv-1", log: { entries, streaming: false } }),
++}));
++vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
++
++afterEach(cleanup);
++
++function renderTab(tab: "output" | "agent_log" | "run_history") {
++  return render(
++    <BottomPanel
++      tab={tab}
++      onTab={vi.fn() as never}
++      investigationId="inv-1"
++      showTerminal={true}
++      height={200}
++      state="pinned"
++      onPanel={vi.fn()}
++    />,
++  );
++}
++
++describe("the bottom panel folds the middle of a very long log", () => {
++  it.each(["agent_log", "output", "run_history"] as const)("%s draws the first 100 and newest 1000", (tab) => {
++    renderTab(tab);
++    const body = screen.getByTestId("bottom-body");
++    expect(body.textContent).toContain("tool99");
++    expect(body.textContent).not.toContain("tool100(");
++    expect(body.textContent).not.toMatch(/tool100\b/);
++    expect(body.textContent).toContain("tool500");
++    expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
++  });
++});
++
++describe("the output tab counts only calls that have output", () => {
++  it("folds 1500 calls with output, not the silent ones between them", () => {
++    // Interleave 1500 silent calls (no output yet): they draw nothing, so they
++    // must not use up the first 100 / newest 1000 or the hidden count.
++    const real = entries.slice();
++    entries.length = 0;
++    for (const e of real) {
++      entries.push(e, { kind: "tool_call", call: { id: `s${e.call.id}`, name: "silent", args: {}, status: "running" } } as never);
++    }
++    try {
++      renderTab("output");
++      expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
++      expect(screen.getByTestId("bottom-body").textContent).toContain("tool99");
++    } finally {
++      entries.length = 0;
++      entries.push(...real);
++    }
++  });
++});
+diff --git a/web/src/pages/investigation/WorkspaceShell.tsx b/web/src/pages/investigation/WorkspaceShell.tsx
+index f3817d19c..eaa561dd9 100644
+--- a/web/src/pages/investigation/WorkspaceShell.tsx
++++ b/web/src/pages/investigation/WorkspaceShell.tsx
+@@ -14,6 +14,7 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
+ import { useIsSuperuserState } from "../../hooks/useIsSuperuser";
+ import { useItemAccess } from "../../hooks/useItemAccess";
+ import { canChangeItemPermission, itemVisibility, parseItemPermission } from "../../lib/itemPermission";
++import { CollapsedFeed } from "../../components/CollapsedFeed";
+ import { DomainField } from "../../components/DomainField";
+ import { DomainFields } from "../../components/DomainFields";
+ import { ItemForm, pruneEmpty } from "../../components/ItemForm";
+@@ -3503,7 +3504,7 @@ export function BottomPanel({
+               color: "var(--text-paper)",
+             }}
+           >
+-            <PanelBody tab={tab} />
++            <PanelBody tab={tab} scrollRef={bodyScrollRef} />
+           </div>
+         ))}
+     </div>
+@@ -3512,11 +3513,18 @@ export function BottomPanel({
+ 
+ function PanelBody({
+   tab,
++  scrollRef,
+ }: {
+   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
++  /** The panel body that scrolls these transcripts — a very long one folds its
++   * middle like the chat (docs/plan-chat-collapse-middle.md). */
++  scrollRef: React.RefObject<HTMLDivElement | null>;
+ }) {
+   const t = useT();
+-  const { log } = useAgent();
++  const { log, investigationId } = useAgent();
++  // Per tab: each transcript has its own rows, so another tab starts over at
++  // the defaults rather than borrowing this one's expansions.
++  const feedKey = `${investigationId}/${tab}`;
+   const [locale] = useLocale();
+ 
+   if (tab === "problems") {
+@@ -3551,13 +3559,18 @@ function PanelBody({
+   }
+ 
+   if (tab === "output") {
+-    const calls = log.entries.filter((e) => e.kind === "tool_call");
++    // Only the calls that have output draw a row here, so only they count
++    // toward the folded feed's first 100 / newest 1000.
++    const calls = log.entries.filter((e) => e.kind === "tool_call" && callBody(e.call) !== undefined);
+     if (calls.length === 0) {
+       return <div style={{ color: "var(--text-paper-d)" }}>No tool output yet.</div>;
+     }
+     return (
+-      <>
+-        {calls.map((e, i) =>
++      <CollapsedFeed
++        entries={calls}
++        resetKey={feedKey}
++        scrollRef={scrollRef}
++        renderRow={(e, i) =>
+           e.kind === "tool_call" && callBody(e.call) !== undefined ? (
+             <div key={i} style={{ marginBottom: 4 }}>
+               <div style={{ color: "var(--accent)" }}>
+@@ -3577,9 +3590,9 @@ function PanelBody({
+                 {callBody(e.call)}
+               </pre>
+             </div>
+-          ) : null,
+-        )}
+-      </>
++          ) : null
++        }
++      />
+     );
+   }
+ 
+@@ -3593,8 +3606,11 @@ function PanelBody({
+     }
+     // Full run detail: command + args + the complete output, not just a name.
+     return (
+-      <>
+-        {calls.map((e, i) =>
++      <CollapsedFeed
++        entries={calls}
++        resetKey={feedKey}
++        scrollRef={scrollRef}
++        renderRow={(e, i) =>
+           e.kind === "tool_call" ? (
+             <details key={i} style={{ marginBottom: 8 }}>
+               <summary
+@@ -3626,9 +3642,9 @@ function PanelBody({
+               )}
+               {callBody(e.call) && <pre style={logPre}>{callBody(e.call)}</pre>}
+             </details>
+-          ) : null,
+-        )}
+-      </>
++          ) : null
++        }
++      />
+     );
+   }
+ 
+@@ -3656,159 +3672,164 @@ function PanelBody({
+           {log.streaming && log.metrics.phase !== "final" ? "▸" : "✓"} {formatMetrics(log.metrics)}
+         </div>
+       )}
+-      {log.entries.map((e, i) => {
+-        // The entry currently being produced (last, while streaming) renders
+-        // live + expanded so it auto-scrolls; finished entries fold like the
+-        // chat does. Switching <div>↔<details> on the same key remounts, so a
+-        // just-finished entry collapses cleanly.
+-        const active = log.streaming && i === log.entries.length - 1;
+-        if (e.kind === "banner") {
+-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+-        }
+-        if (e.kind === "tool_call") {
+-          const running = e.call.status === "running";
++      <CollapsedFeed
++        entries={log.entries}
++        resetKey={feedKey}
++        scrollRef={scrollRef}
++        renderRow={(e, i) => {
++          // The entry currently being produced (last, while streaming) renders
++          // live + expanded so it auto-scrolls; finished entries fold like the
++          // chat does. Switching <div>↔<details> on the same key remounts, so a
++          // just-finished entry collapses cleanly.
++          const active = log.streaming && i === log.entries.length - 1;
++          if (e.kind === "banner") {
++            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
++          }
++          if (e.kind === "tool_call") {
++            const running = e.call.status === "running";
++            const head = (
++              <>
++                <span style={logTs}>{fmtTs(e.call.startedAt)}</span>
++                <span
++                  style={{ width: 56, flexShrink: 0, color: running ? "var(--accent)" : "var(--text-paper-d)" }}
++                >
++                  {running ? "tool ▸" : "tool ✓"}
++                </span>
++                <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
++                  {e.call.name}({argsLine(e.call.args)})
++                </span>
++              </>
++            );
++            const body = callBody(e.call);
++            if (active && running) {
++              return (
++                <div key={i} style={{ marginBottom: 6 }}>
++                  <div style={{ display: "flex", gap: 8 }}>{head}</div>
++                  {body && <pre style={logPre}>{body}</pre>}
++                </div>
++              );
++            }
++            return (
++              <details key={i} style={{ marginBottom: 6 }}>
++                <summary style={logSummary}>{head}</summary>
++                {body && <pre style={logPre}>{body}</pre>}
++              </details>
++            );
++          }
++          if (e.kind === "mention") {
++            return (
++              <LogLine
++                key={i}
++                ts={fmtTs(e.at)}
++                kind="warn"
++                text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
++              />
++            );
++          }
++          if (e.kind === "phase") {
++            // #100: a workflow phase boundary in the log view.
++            return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
++          }
++          if (e.kind === "notice") {
++            // #624: the context horizon moved.
++            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
++          }
++          if (e.kind === "sign_in") {
++            // plan-env-token-refresh D6: the flat transcript states it; the
++            // button is the chat view's.
++            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
++          }
++          if (e.kind === "repair_request") {
++            // plan-workflow-output-repair §3.5: one line in the flat log; the
++            // request itself is readable in the chat view.
++            return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
++          }
++          if (e.kind === "summary") {
++            // #739: the earlier span was summarised. The log view is a flat
++            // transcript, so it states the fact on one line — the originals are
++            // still above it, and the précis itself is readable in the chat view.
++            return (
++              <LogLine
++                key={i}
++                ts={fmtTs(e.at)}
++                kind="muted"
++                text={`— 以上 ${e.replaced} 則已整理成摘要 —`}
++              />
++            );
++          }
++          if (e.kind === "goal_note") {
++            // #613 P3: the goal driver's outcome marker (met / exhausted).
++            // #615: an overnight ending carries a written hand-over under it.
++            return (
++              <LogLine
++                key={i}
++                ts={fmtTs(e.at)}
++                kind="muted"
++                text={e.text}
++                multiline={e.text.includes("\n")}
++              />
++            );
++          }
++          if (e.kind === "step") {
++            // #100: a workflow step's live line (deterministic-phase movement).
++            const glyph =
++              e.step.status === "passed"
++                ? "✓"
++                : e.step.status === "failed"
++                  ? "✗"
++                  : e.step.status === "skipped"
++                    ? "⤳"
++                    : e.step.status === "retrying"
++                      ? "↻"
++                      : e.step.status === "repairing"
++                        ? "✎"
++                        : "▸";
++            const repairing =
++              e.step.status === "repairing"
++                ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
++                : "";
++            const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
++            return (
++              <LogLine
++                key={i}
++                ts={fmtTs(e.at)}
++                kind={e.step.status === "failed" ? "warn" : "muted"}
++                text={`${glyph} ${e.step.name}${detail}`}
++              />
++            );
++          }
+           const head = (
+             <>
+-              <span style={logTs}>{fmtTs(e.call.startedAt)}</span>
+-              <span
+-                style={{ width: 56, flexShrink: 0, color: running ? "var(--accent)" : "var(--text-paper-d)" }}
+-              >
+-                {running ? "tool ▸" : "tool ✓"}
+-              </span>
+-              <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
+-                {e.call.name}({argsLine(e.call.args)})
++              <span style={logTs}>{fmtTs(e.at)}</span>
++              <span style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
++                {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
+               </span>
+             </>
+           );
+-          const body = callBody(e.call);
+-          if (active && running) {
++          const body = (
++            <>
++              {e.message.reasoning && (
++                <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
++              )}
++              {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
++            </>
++          );
++          if (active && e.message.role === "assistant") {
+             return (
+               <div key={i} style={{ marginBottom: 6 }}>
+                 <div style={{ display: "flex", gap: 8 }}>{head}</div>
+-                {body && <pre style={logPre}>{body}</pre>}
++                {body}
+               </div>
+             );
+           }
+           return (
+             <details key={i} style={{ marginBottom: 6 }}>
+               <summary style={logSummary}>{head}</summary>
+-              {body && <pre style={logPre}>{body}</pre>}
+-            </details>
+-          );
+-        }
+-        if (e.kind === "mention") {
+-          return (
+-            <LogLine
+-              key={i}
+-              ts={fmtTs(e.at)}
+-              kind="warn"
+-              text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
+-            />
+-          );
+-        }
+-        if (e.kind === "phase") {
+-          // #100: a workflow phase boundary in the log view.
+-          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
+-        }
+-        if (e.kind === "notice") {
+-          // #624: the context horizon moved.
+-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+-        }
+-        if (e.kind === "sign_in") {
+-          // plan-env-token-refresh D6: the flat transcript states it; the
+-          // button is the chat view's.
+-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+-        }
+-        if (e.kind === "repair_request") {
+-          // plan-workflow-output-repair §3.5: one line in the flat log; the
+-          // request itself is readable in the chat view.
+-          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={t("wf.repairRequest.log")} />;
+-        }
+-        if (e.kind === "summary") {
+-          // #739: the earlier span was summarised. The log view is a flat
+-          // transcript, so it states the fact on one line — the originals are
+-          // still above it, and the précis itself is readable in the chat view.
+-          return (
+-            <LogLine
+-              key={i}
+-              ts={fmtTs(e.at)}
+-              kind="muted"
+-              text={`— 以上 ${e.replaced} 則已整理成摘要 —`}
+-            />
+-          );
+-        }
+-        if (e.kind === "goal_note") {
+-          // #613 P3: the goal driver's outcome marker (met / exhausted).
+-          // #615: an overnight ending carries a written hand-over under it.
+-          return (
+-            <LogLine
+-              key={i}
+-              ts={fmtTs(e.at)}
+-              kind="muted"
+-              text={e.text}
+-              multiline={e.text.includes("\n")}
+-            />
+-          );
+-        }
+-        if (e.kind === "step") {
+-          // #100: a workflow step's live line (deterministic-phase movement).
+-          const glyph =
+-            e.step.status === "passed"
+-              ? "✓"
+-              : e.step.status === "failed"
+-                ? "✗"
+-                : e.step.status === "skipped"
+-                  ? "⤳"
+-                  : e.step.status === "retrying"
+-                    ? "↻"
+-                    : e.step.status === "repairing"
+-                      ? "✎"
+-                      : "▸";
+-          const repairing =
+-            e.step.status === "repairing"
+-              ? ` · ${t("wf.step.repairing", { n: e.step.repair ?? 1 })}`
+-              : "";
+-          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${repairing}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+-          return (
+-            <LogLine
+-              key={i}
+-              ts={fmtTs(e.at)}
+-              kind={e.step.status === "failed" ? "warn" : "muted"}
+-              text={`${glyph} ${e.step.name}${detail}`}
+-            />
+-          );
+-        }
+-        const head = (
+-          <>
+-            <span style={logTs}>{fmtTs(e.at)}</span>
+-            <span style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
+-              {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
+-            </span>
+-          </>
+-        );
+-        const body = (
+-          <>
+-            {e.message.reasoning && (
+-              <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
+-            )}
+-            {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
+-          </>
+-        );
+-        if (active && e.message.role === "assistant") {
+-          return (
+-            <div key={i} style={{ marginBottom: 6 }}>
+-              <div style={{ display: "flex", gap: 8 }}>{head}</div>
+               {body}
+-            </div>
++            </details>
+           );
+-        }
+-        return (
+-          <details key={i} style={{ marginBottom: 6 }}>
+-            <summary style={logSummary}>{head}</summary>
+-            {body}
+-          </details>
+-        );
+-      })}
++          }}
++      />
+       {log.streaming && <LogLine ts="" kind="accent" text="…streaming" />}
+     </>
+   );
+diff --git a/web/src/pages/kb/KbChatPanel.longChat.test.tsx b/web/src/pages/kb/KbChatPanel.longChat.test.tsx
+index da00fdc76..40b06fd0b 100644
+--- a/web/src/pages/kb/KbChatPanel.longChat.test.tsx
++++ b/web/src/pages/kb/KbChatPanel.longChat.test.tsx
+@@ -101,3 +101,36 @@ describe("a streamed token in a long KB chat", () => {
+     expect(drawn.filter((t) => t.startsWith("finished answer") || t.startsWith("q"))).toEqual([]);
+   });
+ });
++
++describe("a very long KB chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
++  it("draws the first 100 and the newest 1000 rows, and the bar between them", async () => {
++    const messages = Array.from({ length: 1500 }, (_, i) => ({ role: "assistant", content: `row ${i}` }));
++    const client: KbApi = {
++      ...mockKbApi,
++      listCollections: async () => [],
++      listChats: async () => [],
++      getChat: async () =>
++        ({
++          resource_id: "c-1",
++          title: "",
++          collection_ids: [],
++          owner: "default-user",
++          shared_with: [],
++          messages,
++        }) as never,
++      subscribeChat: vi.fn(() =>
++        (async function* () {
++          await new Promise<void>(() => {});
++        })(),
++      ),
++    };
++    render(<KbChatPanel chatId="c-1" collectionIds={["k"]} hideCollectionPicker client={client} />, {
++      wrapper: QueryWrap,
++    });
++    await screen.findByText("row 1499");
++    expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
++    expect(screen.queryByText("row 100")).toBeNull();
++    expect(screen.getByText("row 99")).toBeInTheDocument();
++    expect(screen.getByText("row 500")).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/pages/kb/KbChatPanel.tsx b/web/src/pages/kb/KbChatPanel.tsx
+index 2c4f97245..4a1672949 100644
+--- a/web/src/pages/kb/KbChatPanel.tsx
++++ b/web/src/pages/kb/KbChatPanel.tsx
+@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
+ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
+ import { qk } from "../../api/queryKeys";
+ import { ChatFeedRow, type FeedActions } from "../../components/ChatFeedRow";
++import { CollapsedFeed } from "../../components/CollapsedFeed";
+ import { useStableActions } from "../../hooks/useStableActions";
+ import { ErrorNotice } from "../../components/ErrorNotice";
+ import { Icon } from "../../components/Icon";
+@@ -282,16 +283,23 @@ export function KbChatPanel({
+             Hi — ask me anything across your knowledge base. I'll cite the sources.
+           </p>
+         )}
+-        {log.entries.map((entry, i) => (
+-          <ChatFeedRow
+-            key={i}
+-            entry={entry}
+-            index={i}
+-            settled={!log.streaming}
+-            me={me}
+-            actions={rowActions}
+-          />
+-        ))}
++        {/* docs/plan-chat-collapse-middle.md: the middle of a very long chat
++            stays collapsed until asked for. */}
++        <CollapsedFeed
++          entries={log.entries}
++          resetKey={chatId ?? ""}
++          scrollRef={bodyRef}
++          renderRow={(entry, i) => (
++            <ChatFeedRow
++              key={i}
++              entry={entry}
++              index={i}
++              settled={!log.streaming}
++              me={me}
++              actions={rowActions}
++            />
++          )}
++        />
+         <TurnStatus log={log} />
+         {log.error && <ErrorNotice failure={log.error} live />}
+       </div>
