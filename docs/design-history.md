@@ -179,6 +179,7 @@
 | [plan-onboarding-images.md](plan-onboarding-images.md) | onboarding 內文走 markdown、可以放圖 |
 | [plan-show-file-in-chat.md](plan-show-file-in-chat.md) | agent 在 chat 中顯示 workspace 的檔案（`show_file`） |
 | [plan-chat-column-vertical-space.md](plan-chat-column-vertical-space.md) | 把聊天欄的高度還回來 |
+| [plan-chat-collapse-middle.md](plan-chat-collapse-middle.md) | 長對話只畫最上面 100 則與最新 1000 則，中間收起；收起條兩頭各一個「再顯示 1000 則」（推翻 #1002 的「整串都畫」） |
 
 ## PM App
 
