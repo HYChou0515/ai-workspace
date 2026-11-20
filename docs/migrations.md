@@ -3841,9 +3841,6 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
    WHERE relkind = 'r' AND relname LIKE '%telemetry_event%';
    ```
 
----
-
-
 ### 2026-11-20 · #1039 很長的對話只畫頭尾，中間收起 {#pr-1039}
 
 **設定** — 沒有新 key，也沒有可關掉的開關。
@@ -3859,6 +3856,9 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
   **會被誤會成的症狀**：使用者用瀏覽器 Ctrl+F 找不到很舊的訊息，或以為中間的訊息不見了。
   資料都還在，按收起條上的按鈕就會畫出來。
 - 打開一個超過 1100 則的對話，看到收起條、按兩個按鈕各一次，畫面不會跳，就是新版。
+
+---
+
 
 ## 附錄 A：資料回填的機制（specstar 為什麼不會自己補）
 
