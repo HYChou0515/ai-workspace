@@ -16,11 +16,8 @@ from job_contract import JobBackend, JobError, NotFound, Retryable, Status
 
 from job_tool import records
 from job_tool.pack import Packed, PackedFile, job_hash, pack
+from job_tool import run as _run
 from job_tool.run import Deadline, Outcome, TimedOut, status_dict, this_item, within
-
-#: Bytes per upload call. Small enough that one piece fits any upload budget
-#: on a slow link, large enough that a gigabyte is not ten thousand calls.
-PIECE = 4 << 20
 
 _STARTED = (
     "Started. It runs on its own and nothing announces when it ends: tell the user to "
@@ -129,7 +126,7 @@ def _upload(
             while offset < packed_file.size or first:
                 if deadline.left() < budget:
                     return False, sent
-                data = stream.read(PIECE)
+                data = stream.read(_run.PIECE)
                 within(
                     budget,
                     lambda d=data, o=offset: backend().upload(job_id, packed_file.path, o, d),

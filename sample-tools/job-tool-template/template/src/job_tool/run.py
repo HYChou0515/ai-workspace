@@ -29,6 +29,10 @@ from job_contract import MARGIN, PLATFORM_CEILING, JobBackend, JobError, Status
 #: ceiling; the margin is the time left to say what happened.
 CALL_SECONDS = PLATFORM_CEILING - MARGIN
 
+#: Bytes per upload or download call. Small enough that one piece fits its
+#: budget on a slow link, large enough that a gigabyte is not ten thousand calls.
+PIECE = 4 << 20
+
 #: Set by the platform on every dispatch: the item this call runs for.
 ITEM_ENV = "WORKSPACE_ITEM_ID"
 

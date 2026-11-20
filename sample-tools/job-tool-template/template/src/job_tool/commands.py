@@ -1,8 +1,8 @@
-"""The commands a backend is offered to the model as.
+"""The arguments of each command the model is offered.
 
-A command exists for each call the backend supports (`JobBackend.offers`),
-except the one the shell keeps to itself: `find_by_key` (did a submit that ran
-out of time land?).
+Which commands exist is the contract's (`JobBackend.commands`): all seven,
+`queue` only when the backend has `capacity`. What `run` takes is half the
+backend's: the resources are its `resources_schema`.
 """
 
 from __future__ import annotations
@@ -12,8 +12,12 @@ from typing import Any
 
 from job_contract import JobBackend
 
-#: Calls the shell makes on its own and never offers.
-INTERNAL = ("find_by_key",)
+#: How many characters of log one `logs` call returns unless asked otherwise.
+#: Tool output is capped by the platform; a page this size stays well inside it.
+LOG_PAGE = 4000
+#: How many jobs one `jobs` call shows unless asked otherwise, and at most.
+JOBS_PAGE = 20
+JOBS_MAX = 100
 
 
 @dataclass(frozen=True)
@@ -22,52 +26,46 @@ class Command:
     params_json_schema: dict[str, Any]
 
 
-#: How many characters of log one `logs` call returns unless asked otherwise.
-#: Tool output is capped by the platform; a page this size stays well inside it.
-LOG_PAGE = 4000
-#: How many jobs one `list` call returns unless asked otherwise, and at most.
-#: Tool output is capped by the platform, so an unbounded page would come back
-#: cut off — and a cut-off list reads as "these are all my jobs".
-LIST_PAGE = 20
-LIST_MAX = 100
-
-_JOB_ID = {"type": "string", "description": "The job's id, as `submit` or `list` returned it."}
+_JOB_ID = {"type": "string", "description": "The job's id, as run or jobs gave it."}
 
 
 def _object(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
-    return {"type": "object", "properties": properties, "required": required}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
 
 
 def _params(name: str, backend: type[JobBackend]) -> dict[str, Any]:
-    contract = backend.contract
-    if name == "submit":
-        # The author's spec IS the argument: no wrapper for the model to get wrong.
-        return contract.spec_schema
-    if name == "list":
+    if name == "run":
         return _object(
             {
-                "cursor": {
-                    "type": ["string", "null"],
-                    "description": "Where the previous page ended; leave out for the newest jobs.",
+                "workdir": {
+                    "type": "string",
+                    "description": "The folder to send, as a path in the workspace.",
                 },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": LIST_MAX,
-                    "default": LIST_PAGE,
-                },
+                "resources": backend.resources_schema,
             },
+            ["workdir", "resources"],
+        )
+    if name == "jobs":
+        return _object(
+            {"limit": {"type": "integer", "minimum": 1, "maximum": JOBS_MAX, "default": JOBS_PAGE}},
             [],
         )
-    if name == "update":
-        assert contract.patch_schema is not None
-        return _object({"job_id": _JOB_ID, "patch": contract.patch_schema}, ["job_id", "patch"])
-    if name == "logs":
+    if name == "queue":
+        return _object({}, [])
+    if name == "files":
         return _object(
             {
                 "job_id": _JOB_ID,
-                "offset": {"type": "integer", "minimum": 0, "default": 0},
-                "limit": {"type": "integer", "minimum": 1, "default": LOG_PAGE},
+                "path": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "A folder in the job's folder; leave out for all of it.",
+                },
             },
             ["job_id"],
         )
@@ -75,19 +73,35 @@ def _params(name: str, backend: type[JobBackend]) -> dict[str, Any]:
         return _object(
             {
                 "job_id": _JOB_ID,
-                "name": {"type": "string", "description": "Which output to fetch."},
+                "path": {
+                    "type": "string",
+                    "description": "A file or folder in the job's folder, as files lists it.",
+                },
                 "dest": {
                     "type": "string",
-                    "description": "Where to write it, relative to the workspace.",
+                    "description": "Where to write it in the workspace. Leave out for "
+                    "jobs/<job_id>/out/<path>.",
                 },
             },
-            ["job_id", "name", "dest"],
+            ["job_id", "path"],
         )
-    # get, cancel
+    if name == "logs":
+        return _object(
+            {
+                "job_id": _JOB_ID,
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Where to start reading; leave out for the end of the log.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "default": LOG_PAGE},
+            },
+            ["job_id"],
+        )
+    # cancel
     return _object({"job_id": _JOB_ID}, ["job_id"])
 
 
 def commands(backend: type[JobBackend]) -> dict[str, Command]:
     """The commands to offer for `backend`, in a fixed order."""
-    offered = [name for name in backend.offers() if name not in INTERNAL]
-    return {name: Command(name=name, params_json_schema=_params(name, backend)) for name in offered}
+    return {name: Command(name, _params(name, backend)) for name in backend.commands()}

@@ -8,7 +8,10 @@ what it sends, when it starts, what it tells the model.
 
 from __future__ import annotations
 
+import atexit
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -150,3 +153,67 @@ def sample_capacity() -> Capacity:
         queue=(QueuedJob("j-other-2", resources={"gpus": 8}, waiting_since="09:00"),),
         quota={"gpu_hours": "12 of 20"},
     )  # fmt: skip
+
+
+class Missing(Remote):
+    """Forgot `status`: definable, but never loadable."""
+
+    status = None  # type: ignore[assignment]
+
+
+class BadSchema(Remote):
+    """A resources schema the validator itself rejects."""
+
+    resources_schema = {"type": "object", "properties": {"gpus": {"type": "integr"}}}
+
+
+# ── for what leaves the process ──────────────────────────────────────────────
+
+
+class Pooled(Remote):
+    """`logs` waits on a thread pool — what boto3, gRPC and most SDKs do. The
+    pool's worker is not a daemon, and the interpreter joins it at exit."""
+
+    budget = Budget(logs=0.2)
+
+    def logs(self, job_id, offset, limit):
+        with ThreadPoolExecutor(1) as pool:
+            return pool.submit(time.sleep, 30).result()
+
+
+class Shelling(Remote):
+    """`logs` runs a command, the way a backend calls `sbatch` or `kubectl`.
+    The child writes to file descriptor 1, which no `sys.stdout` swap reaches."""
+
+    def logs(self, job_id, offset, limit):
+        subprocess.run(["echo", "CHILD-OUTPUT"], check=True)
+        return "ok", 2
+
+
+class Lingering(Remote):
+    """`logs` answers in time but leaves work behind that speaks after the
+    answer: a pool job (the interpreter waits for it at exit) and an atexit
+    handler."""
+
+    def logs(self, job_id, offset, limit):
+        def later():
+            time.sleep(0.3)
+            print("POOL-NOISE")
+            subprocess.run(["echo", "POOL-CHILD"], check=True)
+
+        pool = ThreadPoolExecutor(1)
+        pool.submit(later)
+        pool.shutdown(wait=False)
+        atexit.register(lambda: print("ATEXIT-NOISE"))
+        return "ok", 2
+
+
+class Chatty(Remote):
+    def logs(self, job_id, offset, limit):
+        print("debug: reading", job_id)
+        return "ok", 2
+
+
+class Exiting(Remote):
+    def logs(self, job_id, offset, limit):
+        raise SystemExit(0)

@@ -1,57 +1,60 @@
 """What the model reads about each command.
 
-Two halves. What the jobs ARE is the author's (`Contract.domain_description`,
-and the descriptions inside their schemas). How a job BEHAVES — returns at
-once, unknown is not gone, accepted is not applied, nothing calls back — is the
-same for every backend and is written here, from the contract, so no author
-restates it and no restatement drifts.
+`run` is two halves. How to lay out a folder for this backend, and what its
+machines have, is the backend's (`run_description`, D4). How the tool behaves
+— what is not sent, that a large folder takes several calls, what counts as
+the same job, that nothing calls back — is the same for every backend and is
+written here, so no author restates it and no restatement drifts. The other
+commands are the tool's words unless the backend gives its own.
 """
 
 from __future__ import annotations
 
 from job_contract import JobBackend
 
-from job_tool.run import describe_window
+_RUN = (
+    "run sends the folder `workdir` of the workspace to that machine and starts it with "
+    "`resources`. Version control, virtual environments, node_modules, caches, .pyc files, "
+    "links and what the folder's .gitignore names are not sent. A large folder takes "
+    "several calls: the answer says how much has been sent, so call run again with the "
+    "same arguments until it says started. The same folder content with the same "
+    "resources, while that job is unfinished, is that job — not a second one — until it "
+    "finishes; after that, the same request starts a new one. run returns at once and "
+    "nothing announces when the job ends: tell the user to ask about it later, then call "
+    "jobs. Before sending, try the command on a small slice here."
+)
+_QUEUE_HINT = " Unsure what to ask for? Call queue to see what is free now."
 
-
-def _submit(backend: type[JobBackend]) -> str:
-    rule = backend.contract.idempotency
-    return (
-        "Submit a job. Returns at once with its job_id; the job then runs on its own and "
-        "nothing announces when it ends, so tell the user to ask about it later. "
-        f"If the same {', '.join(rule.fields)} was already submitted from here — the same "
-        "item, where there is one, under the same credential — within the last "
-        f"{describe_window(rule.window_seconds)}, this returns that job instead of starting "
-        "another; after that, the same work starts a new job."
-    )
-
-
-_FIXED = {
-    "get": (
-        "Show one job. Its phase is running, done or unknown; unknown means the backend "
-        "could not say just now and does NOT mean the job does not exist. Its state is the "
-        "backend's own word for where the job is."
+_DEFAULTS = {
+    "jobs": (
+        "The jobs sent from this workspace, newest first, each with where it is now: "
+        "queued (with its place in the queue when known), running, succeeded, failed, or "
+        "unknown — the backend could not say just now, which does NOT mean the job is gone. "
+        "A job not fully sent yet says how to finish sending it."
     ),
-    "list": (
-        "List the jobs this backend shows you, newest first, one page at a time — not only "
-        "this item's; each says from_this_item."
+    "queue": (
+        "The machines (idle, busy, what each has free), the jobs waiting for one, and the "
+        "quota left, as far as the backend shows them."
     ),
-    "update": (
-        "Change a job that was already submitted; the patch says what can change. The "
-        "change is accepted, not necessarily applied: call get to see when it has taken "
-        "effect."
+    "files": (
+        "List what a job has in its folder on the other machine — what it was sent and "
+        "what it wrote — with sizes. Works while it runs, too."
+    ),
+    "fetch": (
+        "Copy a file or a folder from a job's folder on the other machine into the "
+        "workspace. A large one takes several calls: call fetch again with the same "
+        "arguments until it says done."
+    ),
+    "logs": (
+        "Read a job's log. Without an offset, the end of it; the answer says the log's "
+        "total length and where to read on."
     ),
     "cancel": "Cancel a job. Cancelling a job that already finished is not an error.",
-    "logs": (
-        "Read part of a job's log. The answer says the log's total length and where to "
-        "continue reading."
-    ),
-    "fetch": "Save one of a job's outputs to a path in the workspace.",
 }
 
 
 def describe(name: str, backend: type[JobBackend]) -> str:
-    if name != "submit":
-        return _FIXED[name]
-    domain = backend.contract.domain_description.strip()
-    return f"{domain} {_submit(backend)}" if domain else _submit(backend)
+    if name == "run":
+        hint = _QUEUE_HINT if "queue" in backend.commands() else ""
+        return f"{backend.run_description.strip()}\n\n{_RUN}{hint}"
+    return backend.descriptions.get(name, _DEFAULTS[name])

@@ -11,7 +11,6 @@ from backends import Machine, Remote
 
 from job_contract import NeedsAction, Retryable, Status
 from job_tool import run as run_module
-from job_tool import send as send_module
 from job_tool.run import run
 
 ITEM = "item-1"
@@ -124,7 +123,7 @@ def test_links_in_the_folder_are_named_as_not_sent(workspace):
 def test_a_folder_too_large_for_one_call_is_sent_over_several_and_started_once_complete(
     workspace, monkeypatch
 ):
-    monkeypatch.setattr(send_module, "PIECE", 4)
+    monkeypatch.setattr(run_module, "PIECE", 4)
     monkeypatch.setattr(run_module, "CALL_SECONDS", 1.6)  # three pieces, then too little left
     Remote.machine.delay["upload"] = 0.3
     data = bytes(range(40))
@@ -156,7 +155,7 @@ def test_a_folder_too_large_for_one_call_is_sent_over_several_and_started_once_c
 
 def test_a_resumed_upload_starts_where_the_other_side_says_it_stopped(workspace, monkeypatch):
     # D14: progress comes from the backend's sizes, never from the tool's memory.
-    monkeypatch.setattr(send_module, "PIECE", 4)
+    monkeypatch.setattr(run_module, "PIECE", 4)
     data = b"0123456789"
     _folder(workspace, {"blob.bin": data})
     job_id = _send().answer["job_id"]
