@@ -1,5 +1,7 @@
 # Plan — job tool template: we define the interface, an operator writes the backend
 
+> 被 #1041（plan-job-queue.md）推翻
+
 ## Problem
 
 Someone wants a tool that submits GPU jobs. The next one will want batch reports,
