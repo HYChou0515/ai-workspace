@@ -28,6 +28,7 @@ from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt,
 
 from .protocol import (
     PREVIEW_TIMEOUT_S,
+    ArchiveWriteFailed,
     EnforcedLimits,
     ExecResult,
     FileEntry,
@@ -120,6 +121,19 @@ def _gone_msg(handle: SandboxHandle) -> str:
         "host restarted. It is rebuilt automatically on the next attempt; files in the "
         "workspace are restored, anything only in memory or in a running process is not."
     )
+
+
+def _archive_reason(resp: httpx.Response) -> str:
+    """Why the host could not write a sandbox back to the archive: its own words
+    when it names the refusal (`{"error": "ArchiveWriteFailed", "detail": …}`),
+    otherwise a sentence saying it gave none — an older host's bare 500."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and body.get("error") == "ArchiveWriteFailed" and body.get("detail"):
+        return str(body["detail"])
+    return f"the sandbox host gave no reason (HTTP {resp.status_code})"
 
 
 def _with_host_detail(message: str, detail: object) -> str:
@@ -549,7 +563,15 @@ class HttpSandbox:
         # restore reads instead of walking every path; an older host ignores
         # the field and simply does not pack.
         logger.info("sandbox-http: persist sandbox %s delete=%s pack=%s", handle.id, delete, pack)
-        await self._request(handle, "POST", "/persist", json={"delete": delete, "pack": pack})
+        try:
+            await self._request(handle, "POST", "/persist", json={"delete": delete, "pack": pack})
+        except httpx.HTTPStatusError as exc:
+            # docs/plan-archive-full.md P1: a 5xx here means the write-back did not
+            # happen. The host names the archive's reason (rsync's words); an older
+            # host answers a bare 500, which still is a write-back that did not land.
+            if exc.response.status_code < 500:
+                raise
+            raise ArchiveWriteFailed(_archive_reason(exc.response)) from exc
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         # The HTTP host owns its own per-sandbox lifecycle and mints handles

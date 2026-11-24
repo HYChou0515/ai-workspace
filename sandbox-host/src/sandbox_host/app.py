@@ -34,7 +34,7 @@ from pydantic import BaseModel
 from .artifact import ArtifactError, env_to_json
 from .cgroup_usage import Target
 from .config import SandboxHostSettings
-from .nfs_archive import NfsArchive
+from .nfs_archive import NfsArchive, RsyncError
 from .protocol import (
     ExecResult,
     PreviewFailed,
@@ -788,6 +788,17 @@ def make_host_app(
     async def _preview_failed(_request: Request, exc: PreviewFailed) -> JSONResponse:
         # The converter's reason, named so the app raises it as PreviewFailed.
         return _error(exc)
+
+    @app.exception_handler(RsyncError)
+    async def _archive_refused(_request: Request, exc: RsyncError) -> JSONResponse:
+        # docs/plan-archive-full.md P1: the archive refused a write-back (a full
+        # disk, a dead NFS mount). Without this the app got a bare 500 and the
+        # reason stayed in this pod's log; the app now shows rsync's own words.
+        # Still a 5xx: the write-back did not happen.
+        logger.warning("host: archive write failed: %s", exc.reason)
+        return JSONResponse(
+            status_code=500, content={"error": "ArchiveWriteFailed", "detail": exc.reason}
+        )
 
     @app.get("/sandboxes")
     async def list_sandboxes() -> dict[str, object]:

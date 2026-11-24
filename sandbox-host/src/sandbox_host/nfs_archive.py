@@ -48,8 +48,32 @@ logger = logging.getLogger(__name__)
 Runner = Callable[[list[str]], Awaitable[tuple[int, bytes]]]
 
 
+#: How many of rsync's per-file error lines a reason keeps. A full disk fails
+#: every file after the first, one line each; the first few say what happened.
+_REASON_LINES = 3
+
+
+def failure_reason(rc: int, stderr: bytes) -> str:
+    """What rsync said, short enough to show a person (docs/plan-archive-full.md
+    D2): its first few `rsync: …` lines — the specific errors — then how many
+    more, then its `rsync error: … (code N)` summary. Nothing reworded."""
+    lines = [ln.strip() for ln in stderr.decode(errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        return f"rsync exited {rc} with no message"
+    summary = [ln for ln in lines if ln.startswith("rsync error:")][-1:]
+    specific = [ln for ln in lines if not ln.startswith("rsync error:")]
+    kept = specific[:_REASON_LINES]
+    more = [f"… {len(specific) - len(kept)} more"] if len(specific) > len(kept) else []
+    return "\n".join([*kept, *more, *summary])
+
+
 class RsyncError(RuntimeError):
-    """An rsync invocation exited non-zero."""
+    """An rsync invocation exited non-zero. `reason` is what rsync said
+    (`failure_reason`) — the words the app shows when a write-back fails."""
+
+    def __init__(self, rc: int, stderr: bytes) -> None:
+        self.reason = failure_reason(rc, stderr)
+        super().__init__(f"rsync exited {rc}: {stderr.decode(errors='replace')}")
 
 
 def _check_item(item_id: str) -> str:
@@ -297,7 +321,7 @@ class NfsArchive:
     async def _invoke(self, argv: list[str]) -> None:
         rc, stderr = await self._run(argv)
         if rc != 0:
-            raise RsyncError(f"rsync exited {rc}: {stderr.decode(errors='replace')}")
+            raise RsyncError(rc, stderr)
 
     async def _default_run(self, argv: list[str]) -> tuple[int, bytes]:
         proc = await asyncio.create_subprocess_exec(

@@ -34,6 +34,7 @@ from workspace_app.sandbox.http_client import (
 )
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import (
+    ArchiveWriteFailed,
     EnforcedLimits,
     PreviewFailed,
     SandboxBusy,
@@ -53,6 +54,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     app.state.created_item_ids = []  # #492: item_ids seen by create
     app.state.persisted = []  # #492: (rid, delete) seen by persist
     app.state.packs = []  # plan-archive-pack: the `pack` field as sent
+    app.state.persist_refusal = ""  # plan-archive-full: "" ok | "bare" | the reason
     app.state.created_tools = []  # #674: `{name: sha}` seen by create
     # The resource ceilings the host reads off a create. Modelled here because a
     # test that only asserted "our side sent something" would be immune to the
@@ -114,10 +116,20 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
             "refused": {},
         }
 
-    @app.post("/sandboxes/{rid}/persist", status_code=204)
-    async def persist(rid: str, body: dict) -> None:
+    @app.post("/sandboxes/{rid}/persist", status_code=204, response_model=None)
+    async def persist(rid: str, body: dict) -> Response | None:
         # #492: record (rid, delete) so the client's persist call can be asserted.
         backend._require(SandboxHandle(id=rid))  # raise SandboxNotFound for a dead handle
+        # docs/plan-archive-full.md P1: the real host's answer when the archive
+        # refuses (`sandbox_host.app._archive_refused`, pinned by the host's
+        # `test_archive_full`), or an older host's bare 500.
+        refusal = app.state.persist_refusal
+        if refusal == "bare":
+            return Response("Internal Server Error", status_code=500)
+        if refusal:
+            return JSONResponse(
+                status_code=500, content={"error": "ArchiveWriteFailed", "detail": refusal}
+            )
         app.state.persisted.append((rid, bool(body.get("delete", False))))
         app.state.packs.append(body.get("pack"))
 
@@ -380,6 +392,35 @@ async def test_persist_sends_pack_only_when_asked(host_and_client):
     await sandbox.persist(h, delete=True, pack=True)
     await sandbox.persist(h, delete=True)
     assert app.state.packs == [True, False]
+
+
+_ENOSPC = (
+    'rsync: [receiver] write failed on "/tiny/item/big.bin": No space left on device (28)\n'
+    "rsync error: error in file IO (code 11) at receiver.c(657) [receiver=3.5.0]"
+)
+
+
+async def test_persist_the_archive_refused_says_why(host_and_client):
+    """docs/plan-archive-full.md P1: a write-back the archive refused is an
+    `ArchiveWriteFailed` carrying rsync's words — not a bare HTTP error whose
+    reason stayed in the host's log."""
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    app.state.persist_refusal = _ENOSPC
+    with pytest.raises(ArchiveWriteFailed) as caught:
+        await sandbox.persist(h, delete=False)
+    assert caught.value.reason == _ENOSPC
+
+
+async def test_persist_an_older_host_refused_is_still_a_failed_write_back(host_and_client):
+    """A host older than this app (a rollout's window) answers with a bare 500:
+    the write-back still did not happen, and the reason says the host gave none."""
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    app.state.persist_refusal = "bare"
+    with pytest.raises(ArchiveWriteFailed) as caught:
+        await sandbox.persist(h, delete=True)
+    assert caught.value.reason == "the sandbox host gave no reason (HTTP 500)"
 
 
 async def test_persist_on_dead_handle_raises_sandbox_not_found(host_and_client):
