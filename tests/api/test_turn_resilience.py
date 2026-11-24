@@ -422,6 +422,7 @@ async def test_a_send_survives_its_request_being_cancelled():
     service._admission = None  # no per-person limit configured
     service._request_env = None  # #714: no request→env seam configured
     service._private_env = None  # plan-wui-viewer-login: no private-layer store
+    service._archive_gate = None  # plan-archive-full: no archive to refuse on
     service._get_user_id = lambda: "u"  # whom the turn is for, settled in `send`
 
     async def _slow(*_a, **_k) -> None:  # noqa: ANN002, ANN003
@@ -451,6 +452,7 @@ async def test_a_send_still_reports_its_own_failure_to_a_live_request():
     service._admission = None  # no per-person limit configured
     service._request_env = None  # #714: no request→env seam configured
     service._private_env = None  # plan-wui-viewer-login: no private-layer store
+    service._archive_gate = None  # plan-archive-full: no archive to refuse on
     service._get_user_id = lambda: "u"  # whom the turn is for, settled in `send`
 
     async def _boom(*_a, **_k) -> None:  # noqa: ANN002, ANN003
