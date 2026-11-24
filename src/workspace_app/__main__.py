@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import uvicorn
 
 from workspace_app.api import create_app
+from workspace_app.api.archive_health import ArchiveSpace
 from workspace_app.api.drain import DrainingServer
 from workspace_app.apps.skill_hub_git import resolve_git_root
 from workspace_app.capacity.service import CapacityService
@@ -303,6 +304,15 @@ def build_app(
                 and settings.sandbox.http is not None
                 and settings.sandbox.http.host_managed_durable
             ),
+            # docs/plan-archive-full.md D3/D4/D8: the archive is the `nfs_tree`
+            # durable store; with none, nothing is measured or refused.
+            archive_space=(
+                ArchiveSpace(settings.sandbox.durable.nfs_root)
+                if settings.sandbox.durable.kind == "nfs_tree" and settings.sandbox.durable.nfs_root
+                else None
+            ),
+            archive_block_free_ratio=settings.sandbox.durable.block_free_ratio,
+            archive_warn_free_ratio=settings.sandbox.durable.warn_free_ratio,
             # #245: blob-GC sweeper — reclaims orphaned blobs (0 ⇒ off).
             gc_interval=(
                 timedelta(seconds=settings.filestore.gc_interval_sec)

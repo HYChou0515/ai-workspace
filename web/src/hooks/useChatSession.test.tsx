@@ -856,4 +856,33 @@ describe("a send refused because saving is failing", () => {
     expect(failure?.headline).toContain("No space left on device (28)");
     expect(failure?.headline).not.toMatch(/空間已滿|workspace is full/i);
   });
+
+  it("says the archive is nearly full, with how much is left, when below its floor", async () => {
+    // D3: every item is refused before the archive is full; the numbers are the
+    // reason. 1 GiB of 20 GiB is 5%, under a 10% floor.
+    const err = Object.assign(new Error("Insufficient Storage"), {
+      status: 507,
+      code: "archive_space_low",
+      detail: {
+        error: "archive_space_low",
+        free: 1024 ** 3,
+        total: 20 * 1024 ** 3,
+        block_free_ratio: 0.1,
+      },
+    });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("keep going");
+    });
+
+    const failure = result.current.log.error;
+    expect(failure?.kind).toBe("archive_space_low");
+    expect(failure?.headline).toContain("1.0 GB");
+    expect(failure?.headline).toContain("5.0%");
+    expect(failure?.headline).toContain("10%");
+    expect(failure?.headline).not.toMatch(/空間已滿|workspace is full/i);
+  });
 });

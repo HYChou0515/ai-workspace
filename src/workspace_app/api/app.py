@@ -108,7 +108,14 @@ from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import make_relay
-from .archive_health import ArchiveRefusing, SpecstarArchiveFailures, register_archive_health
+from .archive_health import (
+    ArchiveGate,
+    ArchiveRefusing,
+    ArchiveSpace,
+    ArchiveSpaceLow,
+    SpecstarArchiveFailures,
+    register_archive_health,
+)
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -570,6 +577,13 @@ def create_app(
     # (shared-vol local / non-http), unchanged. __main__ derives it from
     # settings.sandbox.kind == "http" and settings.sandbox.http.host_managed_durable.
     host_managed_durable: bool = False,
+    # docs/plan-archive-full.md D3/D4/D8: the archive's filesystem as this pod
+    # mounts it (`sandbox.durable.nfs_root`), and the two floors as a fraction of
+    # its capacity — below `block` no item takes a new turn, below `warn` the
+    # superusers are told. None ⇒ no archive here: nothing is measured or refused.
+    archive_space: ArchiveSpace | None = None,
+    archive_block_free_ratio: float = 0.1,
+    archive_warn_free_ratio: float = 0.2,
     # #493 symptom 1 (504): how long a message POST awaits its own turn before
     # detaching it to the engine's background worker and returning 202. Snappy
     # turns finish within this (unchanged behaviour); a long turn detaches well
@@ -892,6 +906,13 @@ def create_app(
     # by the registry's write-back, read by the turn gate (P3). Shared because the
     # pod whose checkpoint failed is rarely the one the next message lands on.
     archive_failures = SpecstarArchiveFailures(spec)
+    # …and the one gate both turn paths ask (P3/P4): this item's refusal, then
+    # the archive's floor. `archive_space` None ⇒ no archive here (D8).
+    archive_gate = ArchiveGate(
+        archive_failures, archive_space, block_free_ratio=archive_block_free_ratio
+    )
+    if archive_space is None:
+        logger.info("archive: no sandbox archive configured — its space is not watched")
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE
@@ -1722,6 +1743,22 @@ def create_app(
         return JSONResponse(
             status_code=507,
             content={"detail": {"error": exc.code, "reason": exc.reason}},
+        )
+
+    @app.exception_handler(ArchiveSpaceLow)
+    async def _archive_space_low(_request: Request, exc: ArchiveSpaceLow) -> JSONResponse:
+        """docs/plan-archive-full.md D3: every item stops taking new turns while
+        the archive is below its floor. The numbers are the reason."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": exc.code,
+                    "free": exc.free,
+                    "total": exc.total,
+                    "block_free_ratio": exc.block_free_ratio,
+                }
+            },
         )
 
     @app.exception_handler(TurnRefused)
@@ -2639,6 +2676,7 @@ def create_app(
     # adapter. The orchestrator wiring + capability routes call its methods.
     workflow_executor = WorkflowExecutor(
         admission=admission,
+        archive_gate=archive_gate,
         spec=spec,
         files=files,
         registry=registry,
@@ -2780,7 +2818,7 @@ def create_app(
 
     chat_send_svc = ChatSendService(
         admission=admission,
-        archive_failures=archive_failures,
+        archive_gate=archive_gate,
         spec=spec,
         locator=locator,
         # #615: the after-hours budget + window the turn-end driver reads to

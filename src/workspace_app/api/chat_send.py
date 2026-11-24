@@ -46,7 +46,7 @@ from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..users.labels import attributed, speaker_label
 from ..workcalendar import OffHoursCalendar
-from .archive_health import IArchiveFailures
+from .archive_health import ArchiveGate
 from .env_layers import PersonEnv
 from .env_refresh import DeadSignIn, EnvRefresher, RefreshOutcome
 from .events import GoalUpdated, RunError, SignInExpired, TurnEnded, UserMessage
@@ -238,7 +238,7 @@ class ChatSendService:
         offhours: OffHoursSettings | None = None,
         flush_item: Callable[[str], Awaitable[None]],
         admission: AdmissionGate | None = None,
-        archive_failures: IArchiveFailures | None = None,
+        archive_gate: ArchiveGate | None = None,
         request_env: IRequestEnv | None = None,
         private_env: PrivateEnvStore | None = None,
         send_await_timeout: float = 25.0,
@@ -287,9 +287,8 @@ class ChatSendService:
         # The cpu/memory sibling of the workspace-full gate below. None ⇒ no
         # per-person limits configured, so nothing to check.
         self._admission = admission
-        # docs/plan-archive-full.md P3: the registry's own record, handed in by
-        # `create_app` — one object, read by both turn gates.
-        self._archive_failures = archive_failures
+        # docs/plan-archive-full.md P3/P4: one object, read by both turn gates.
+        self._archive_gate = archive_gate
         # #714: the deploy's request→env impl, or None when it plugged none in
         # (then a turn's tools see the item's env_vars alone, as before).
         self._request_env = request_env
@@ -341,9 +340,7 @@ class ChatSendService:
         BEFORE the message is persisted — see `turn_gate.admit_turn` for why the
         gate sits here rather than on each write, and why it reports every limit
         that bound rather than the first one to fire."""
-        await admit_turn(
-            self._files, self._admission, investigation_id, archive=self._archive_failures
-        )
+        await admit_turn(self._files, self._admission, investigation_id, archive=self._archive_gate)
         # Who this turn is for, settled ONCE here rather than again downstream:
         # the request env is composed for this person, and the message is stamped
         # with them, so the two must not be able to disagree.

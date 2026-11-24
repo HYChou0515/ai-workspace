@@ -727,7 +727,7 @@ export function useChatSession(
         const failure =
           archive !== null
             ? {
-                kind: "archive_write_failed",
+                kind: archive.kind,
                 raw: archive.reason,
                 headline: archive.headline,
               }

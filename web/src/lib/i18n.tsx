@@ -1575,6 +1575,12 @@ export const messages = {
       "沒有送出:目前無法存檔，新的修改會在沙盒重啟時遺失，請聯絡管理員。原因:{reason}",
     en: "Not sent — saving is failing right now, and new changes would be lost when the sandbox restarts. Please contact an administrator. Reason: {reason}",
   },
+  // D3: the sandbox archive is below its floor, so NO item takes a new turn.
+  "chat.send.archiveLow": {
+    "zh-TW":
+      "沒有送出:沙盒存檔空間只剩 {free}（{pct}%），低於 {floor}%，在擴充之前不接受新的對話，請聯絡管理員。",
+    en: "Not sent — the sandbox archive has only {free} left ({pct}%), below its {floor}% floor; no new conversations are taken until it is extended. Please contact an administrator.",
+  },
   // #714: the deploy's request→env source refused or broke. The turn was not
   // started BECAUSE the tools would have run without knowing who is asking, so
   // the copy has to say "nothing happened", not "something went wrong".

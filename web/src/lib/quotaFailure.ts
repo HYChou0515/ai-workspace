@@ -51,9 +51,7 @@ export const QUOTA_DIMENSION_KEY = {
   memory: "resources.memory",
 } as const;
 
-export function quotaAmounts(
-  detail: QuotaDetail | undefined,
-): {
+export function quotaAmounts(detail: QuotaDetail | undefined): {
   used: string;
   limit: string;
   dimension?: keyof typeof QUOTA_DIMENSION_KEY;
@@ -144,15 +142,39 @@ export function archiveRefusal(
   err: {
     status?: number;
     code?: string;
-    detail?: QuotaDetail & { reason?: unknown };
+    detail?: QuotaDetail & {
+      reason?: unknown;
+      free?: unknown;
+      total?: unknown;
+      block_free_ratio?: unknown;
+    };
   } | null,
-): { headline: string; reason: string } | null {
+): { kind: string; headline: string; reason: string } | null {
   if (err?.status !== 507) return null;
   const code = err.code ?? err.detail?.error;
-  if (code !== "archive_write_failed") return null;
-  const reason =
-    typeof err.detail?.reason === "string" ? err.detail.reason : "";
-  return { headline: t("chat.send.archiveFailing", { reason }), reason };
+  if (code === "archive_write_failed") {
+    const reason =
+      typeof err.detail?.reason === "string" ? err.detail.reason : "";
+    return {
+      kind: code,
+      headline: t("chat.send.archiveFailing", { reason }),
+      reason,
+    };
+  }
+  if (code === "archive_space_low") {
+    // D3: the whole archive is below its floor. The numbers ARE the reason.
+    const { free, total, block_free_ratio: floor } = err.detail ?? {};
+    if (typeof free !== "number" || typeof total !== "number" || !total)
+      return null;
+    const vars = {
+      free: formatBytes(free),
+      pct: ((100 * free) / total).toFixed(1),
+      floor: typeof floor === "number" ? Math.round(floor * 100) : "",
+    };
+    const headline = t("chat.send.archiveLow", vars);
+    return { kind: code, headline, reason: headline };
+  }
+  return null;
 }
 
 /**

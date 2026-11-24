@@ -19,7 +19,11 @@ import asyncio
 import contextlib
 import datetime as dt
 import logging
+import shutil
+import time
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -127,3 +131,83 @@ class SpecstarArchiveFailures(IArchiveFailures):
             return None
         assert isinstance(data, _ArchiveWriteFailure)
         return data.reason
+
+
+class ArchiveSpace:
+    """How much room the archive has left, as THIS pod mounts it (D3, D8).
+
+    The archive is the claim the sandbox host rsyncs into, and the app pods
+    mount the same claim (`sandbox.durable.nfs_root`), so the answer is one
+    `disk_usage` call here — no host↔app protocol to drift. Cached for
+    `max_age_s`: a burst of sends must not each make a round trip to the NFS
+    server, and a figure a few seconds old decides a 10% floor just as well."""
+
+    def __init__(
+        self,
+        root: Path | str,
+        *,
+        usage: Callable[[Path], Any] = shutil.disk_usage,
+        clock: Callable[[], float] = time.monotonic,
+        max_age_s: float = 30.0,
+    ) -> None:
+        self.root = Path(root)
+        self._usage = usage
+        self._clock = clock
+        self._max_age_s = max_age_s
+        self._last: tuple[float, int, int] | None = None
+
+    async def measure(self) -> tuple[int, int]:
+        """`(free, total)` in bytes — what an unprivileged writer can still use."""
+        now = self._clock()
+        if self._last is not None and now - self._last[0] < self._max_age_s:
+            return self._last[1], self._last[2]
+        du = await asyncio.to_thread(self._usage, self.root)
+        self._last = (now, int(du.free), int(du.total))
+        return int(du.free), int(du.total)
+
+
+class ArchiveSpaceLow(Exception):
+    """A turn refused because the archive is below its floor (D3): every item
+    stops taking new turns BEFORE the archive is full, not after, so nobody's
+    work is left with nowhere to go. The numbers are the reason."""
+
+    code = "archive_space_low"
+
+    def __init__(self, free: int, total: int, block_free_ratio: float) -> None:
+        self.free = free
+        self.total = total
+        self.block_free_ratio = block_free_ratio
+        pct = 100 * free / total if total else 0
+        super().__init__(
+            f"the sandbox archive has {free} of {total} bytes free ({pct:.1f}%), "
+            f"below the {block_free_ratio:.0%} floor"
+        )
+
+
+class ArchiveGate:
+    """The two archive refusals a turn can meet, asked in one place by both turn
+    gates (the chat send and a workflow step — `turn_gate.admit_turn`).
+
+    This item's own refusal comes first: it carries the archive's reason, which
+    says more than a percentage. `space` None ⇒ no archive on this deploy (D8);
+    a floor of 0 switches its refusal off (D7)."""
+
+    def __init__(
+        self,
+        failures: IArchiveFailures | None,
+        space: ArchiveSpace | None,
+        *,
+        block_free_ratio: float,
+    ) -> None:
+        self.failures = failures
+        self.space = space
+        self.block_free_ratio = block_free_ratio
+
+    async def check(self, item_id: str) -> None:
+        if self.failures is not None and (reason := await self.failures.reason_of(item_id)):
+            raise ArchiveRefusing(item_id, reason)
+        if self.space is None or self.block_free_ratio <= 0:
+            return
+        free, total = await self.space.measure()
+        if total and free < total * self.block_free_ratio:
+            raise ArchiveSpaceLow(free, total, self.block_free_ratio)
