@@ -36,6 +36,7 @@ from ..observability.boot import boot_step
 from ..worker import _JOBTYPE_ATTR
 from ..workflow.user_schedule_sweep import UserScheduleSweeper
 from . import perf_trace
+from .archive_health import ArchiveSpaceWatch
 from .notification_delivery import INotificationChannel, deliver_pending
 from .registry import InvestigationRegistry
 from .turn_reclaim import RECLAIM_TICK_S
@@ -67,6 +68,10 @@ _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
 # empty query. Hourly asking capped a backlog at ~13k rows/h (~45 ms a row on
 # Postgres, review round 1); this is about three times that.
 TELEMETRY_PURGE_INTERVAL_S = 600.0
+#: docs/plan-archive-full.md P5: how often the archive's free space is checked
+#: for the superusers. Its refusal floor (P4) is measured on every turn instead,
+#: so this only decides how soon someone hears — a minute is soon enough.
+ARCHIVE_WATCH_INTERVAL_S = 60.0
 # #506 P8: how often the API ASKS for each collection's review-inbox cluster fold —
 # backfill any candidate that has no ClusterMember yet, then merge race-split
 # clusters — so the grouped 待審核 inbox converges without a reindex. Asking is all
@@ -134,6 +139,9 @@ def build_lifespan(
     gc_interval: timedelta | None,
     disk_reconcile_interval: timedelta | None = None,
     telemetry_keep_days: int = 0,
+    # docs/plan-archive-full.md P5: tells the superusers the archive is filling.
+    # None ⇒ no archive here, or nobody to tell.
+    archive_watch: ArchiveSpaceWatch | None = None,
     shutdown_budget: timedelta = timedelta(seconds=20),
     trigger_check_interval: timedelta | None = None,
     user_schedule_sweeper: UserScheduleSweeper | None = None,
@@ -522,6 +530,28 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def archive_space_watcher(app: FastAPI) -> None:
+        """docs/plan-archive-full.md D4: measure the archive and tell the
+        superusers what is owed. Pod-local (a `disk_usage` of this pod's own
+        mount) plus a few notification rows; one pod per window (`ScanLease`)
+        so the fleet does not each measure and race to tell. First tick at once:
+        a rollout onto an already-full archive must not wait a window to say so."""
+        from ..workflow.triggers import ScanLease, SpecstarTriggerStore
+
+        assert archive_watch is not None
+        interval_s = ARCHIVE_WATCH_INTERVAL_S
+        lease = ScanLease(SpecstarTriggerStore(spec), "archive-space", interval_s=interval_s)
+        try:
+            while True:
+                try:
+                    if await asyncio.to_thread(lease.claim):
+                        await archive_watch.tick()
+                except Exception:  # noqa: BLE001 — one bad tick must not end the watch
+                    logger.warning("lifespan: archive space watch tick failed", exc_info=True)
+                await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+
     async def telemetry_purge_sweeper(app: FastAPI) -> None:
         """docs/plan-telemetry-retention.md: ask for the telemetry purge — a
         pure producer like ``disk_ledger_sweeper`` (one ``ScanLease`` window ⇒
@@ -823,6 +853,9 @@ def build_lifespan(
         if telemetry_keep_days > 0:
             bg.append(asyncio.create_task(telemetry_purge_sweeper(app)))
             logger.debug("lifespan: telemetry-purge sweeper enabled")
+        if archive_watch is not None:
+            bg.append(asyncio.create_task(archive_space_watcher(app)))
+            logger.debug("lifespan: archive space watch enabled")
         if offhours is not None and offhours.window:
             bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
             logger.debug("lifespan: goal off-hours sweeper enabled")

@@ -78,6 +78,8 @@ def register_archive_health(spec: SpecStar) -> None:
     indexed — the only read is by id."""
     with contextlib.suppress(ValueError):
         spec.add_model(_ArchiveWriteFailure)
+    with contextlib.suppress(ValueError):
+        spec.add_model(_ArchiveLowEpisode)
 
 
 class SpecstarArchiveFailures(IArchiveFailures):
@@ -211,3 +213,147 @@ class ArchiveGate:
         free, total = await self.space.measure()
         if total and free < total * self.block_free_ratio:
             raise ArchiveSpaceLow(free, total, self.block_free_ratio)
+
+
+class _ArchiveLowEpisode(Struct):
+    """One stretch below the warning floor: when it began. Every notification
+    of the stretch is keyed by it, so recovering above the floor and falling
+    again is a new stretch, told afresh."""
+
+    started_ms: int
+
+
+_EPISODE_ID = "archive"
+
+
+def _levels(warn: float, block: float) -> list[float]:
+    """The free-space fractions at which the superusers are told: the warning
+    floor, halfway down, and the refusal floor (20%, 15%, 10% by default)."""
+    if warn <= 0:
+        return []
+    raw = [warn, block]
+    if 0 < block < warn:
+        raw.append((warn + block) / 2)
+    return sorted({round(level, 6) for level in raw if level > 0}, reverse=True)
+
+
+def _gib(n: int) -> str:
+    return f"{n / 1024**3:.1f} GiB"
+
+
+class ArchiveSpaceWatch:
+    """Tells every superuser, once per level crossed, that the archive is
+    filling (docs/plan-archive-full.md D4) — so the people who can extend it hear
+    before anyone is refused (D3).
+
+    `notify()` writes the row the bell shows; the deploy's
+    `server.notification_channel`, when wired, relays every row (mail, chat), so
+    nothing here knows about mail (D5). Each row is keyed
+    `archive-low:<stretch>:<level>:<who>` and checked with `notification_sent`
+    first, so a second tick — or a second pod — does not tell it again; the
+    lifespan's `ScanLease` keeps the pods from ticking at once in the first
+    place."""
+
+    def __init__(
+        self,
+        spec: SpecStar,
+        space: ArchiveSpace,
+        *,
+        superusers: frozenset[str],
+        warn_free_ratio: float,
+        block_free_ratio: float,
+        now_ms: Callable[[], int] | None = None,
+    ) -> None:
+        self._spec = spec
+        self._space = space
+        self._superusers = sorted(superusers)
+        self._levels = _levels(warn_free_ratio, block_free_ratio)
+        self._warn = warn_free_ratio
+        self._block = block_free_ratio
+        self._now_ms = now_ms or (lambda: int(dt.datetime.now(dt.UTC).timestamp() * 1000))
+
+    async def tick(self) -> int:
+        """Measure once and tell what is owed. Returns how many rows it wrote."""
+        if not self._levels:
+            return 0
+        free, total = await self._space.measure()
+        if not total:
+            return 0
+        return await asyncio.to_thread(self._tick_sync, free, total)
+
+    def _tick_sync(self, free: int, total: int) -> int:
+        from .notifications import notification_sent, notify
+
+        ratio = free / total
+        if ratio >= self._warn:
+            self._end_stretch()
+            return 0
+        stretch = self._stretch()
+        sent = 0
+        for level in self._levels:
+            if ratio >= level:
+                continue
+            for who in self._superusers:
+                key = f"archive-low:{stretch}:{level:g}:{who}"
+                if notification_sent(self._spec, key):
+                    continue
+                notify(
+                    self._spec,
+                    recipient=who,
+                    kind="archive_space_low",
+                    title=f"Sandbox archive is {100 * ratio:.1f}% free "
+                    f"({_gib(free)} of {_gib(total)})",
+                    body=self._body(ratio),
+                    link="/capacity",
+                    dedup_key=key,
+                )
+                sent += 1
+        if sent:
+            logger.warning(
+                "archive: %.1f%% free (%d of %d bytes) under %s — told %d superuser row(s)",
+                100 * ratio,
+                free,
+                total,
+                self._space.root,
+                sent,
+            )
+        return sent
+
+    def _body(self, ratio: float) -> str:
+        extend = f"Extend the volume behind {self._space.root}."
+        if self._block > 0 and ratio < self._block:
+            return (
+                f"It is below the {self._block:.0%} floor: no item takes a new "
+                f"conversation until it is extended. {extend}"
+            )
+        if self._block > 0:
+            return f"Below {self._block:.0%} free, no item will take a new conversation. {extend}"
+        return extend
+
+    def _stretch(self) -> int:
+        rm = self._spec.get_resource_manager(_ArchiveLowEpisode)
+        try:
+            data = rm.get(_EPISODE_ID).data
+            assert isinstance(data, _ArchiveLowEpisode)
+            return data.started_ms
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            pass
+        rec = _ArchiveLowEpisode(started_ms=self._now_ms())
+        try:
+            rm.restore(_EPISODE_ID)
+            rm.modify(_EPISODE_ID, rec, status=RevisionStatus.draft)
+        except ResourceIDNotFoundError:
+            try:
+                rm.create(rec, resource_id=_EPISODE_ID, status=RevisionStatus.draft)
+            except DuplicateResourceError:
+                # Another pod began the stretch first: its start is the key.
+                data = rm.get(_EPISODE_ID).data
+                assert isinstance(data, _ArchiveLowEpisode)
+                return data.started_ms
+        return rec.started_ms
+
+    def _end_stretch(self) -> None:
+        rm = self._spec.get_resource_manager(_ArchiveLowEpisode)
+        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+            rm.delete(_EPISODE_ID)
+            logger.info("archive: back above the warning floor")

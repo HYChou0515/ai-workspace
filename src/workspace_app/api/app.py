@@ -113,6 +113,7 @@ from .archive_health import (
     ArchiveRefusing,
     ArchiveSpace,
     ArchiveSpaceLow,
+    ArchiveSpaceWatch,
     SpecstarArchiveFailures,
     register_archive_health,
 )
@@ -1610,6 +1611,17 @@ def create_app(
         gc_interval=gc_interval,
         disk_reconcile_interval=disk_reconcile_interval,
         telemetry_keep_days=telemetry_keep_days,
+        archive_watch=(
+            ArchiveSpaceWatch(
+                spec,
+                archive_space,
+                superusers=superusers,
+                warn_free_ratio=archive_warn_free_ratio,
+                block_free_ratio=archive_block_free_ratio,
+            )
+            if archive_space is not None and superusers
+            else None
+        ),
         shutdown_budget=shutdown_budget,
         turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
