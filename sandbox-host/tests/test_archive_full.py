@@ -110,3 +110,53 @@ async def test_persist_answers_with_the_reason_when_the_archive_refuses_before_r
     assert r.status_code == 500
     assert r.json()["error"] == "ArchiveWriteFailed"
     assert "No space left on device" in r.json()["detail"]
+
+
+async def test_files_vanishing_mid_copy_are_not_a_refused_write_back(tmp_path: Path):
+    """Review round 2: an agent's `pip install` or test run creates and deletes
+    temp files while a checkpoint copies; rsync then exits 24 ("some files
+    vanished before they could be transferred"). The archive took everything that
+    still exists — a vanished file had nothing left to save — so this is a
+    write-back that landed, not one the archive refused (which stops the item)."""
+
+    async def vanished(argv: list[str]) -> tuple[int, bytes]:
+        if argv[0] != "rsync":
+            return 0, b""
+        return 24, (
+            b'file has vanished: "/live/x/root/.pytest_cache/tmp1"\n'
+            b"rsync warning: some files vanished before they could be transferred "
+            b"(code 24) at main.c(1338) [sender=3.5.0]\n"
+        )
+
+    archive = NfsArchive(tmp_path / "nfs", runner=vanished)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+    app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-1"})).json()["remote_id"]
+        additive = await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
+        reconcile = await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})
+    assert additive.status_code == 204
+    assert reconcile.status_code == 204
+
+
+async def test_an_item_dir_that_cannot_be_made_says_why(tmp_path: Path):
+    """Review round 2: a brand-new item's first write-back starts by making its
+    directory on the archive — on a full or broken archive that is the first
+    thing to fail, and it must name the reason like rsync would. (A plain file
+    where the archive root should be makes `mkdir` fail without needing a
+    full disk.)"""
+    root = tmp_path / "nfs"
+    root.write_text("not a directory")
+
+    async def ok(argv: list[str]) -> tuple[int, bytes]:
+        return 0, b""
+
+    archive = NfsArchive(root, runner=ok)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+    app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-1"})).json()["remote_id"]
+        r = await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
+    assert r.status_code == 500
+    assert r.json()["error"] == "ArchiveWriteFailed"
+    assert "Not a directory" in r.json()["detail"] or "File exists" in r.json()["detail"]

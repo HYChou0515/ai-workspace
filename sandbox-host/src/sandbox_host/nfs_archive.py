@@ -95,6 +95,8 @@ def _check_item(item_id: str) -> str:
 # Recursive, copy symlinks as symlinks, preserve permissions + mtimes, and
 # devices/specials — but deliberately NOT owner/group (see module docstring).
 _RSYNC_FLAGS = "-rlptD"
+#: rsync's "partial transfer due to vanished source files".
+_RSYNC_VANISHED = 24
 
 _GEN_RE = re.compile(r"[0-9a-f]{32}")
 # `<item>.pack.<uuid>.tmp`: one per pack being written, so two never share one.
@@ -174,7 +176,12 @@ class NfsArchive:
             argv.append("--delete")
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
-        await self._invoke(argv)
+        # Exit 24 — "some files vanished before they could be transferred" — is
+        # an agent's temp files coming and going mid-copy (a `pip install`, a
+        # test run). Everything that still exists was copied, and a vanished file
+        # had nothing left to save: the write-back LANDED. Read as a refusal it
+        # stopped the item's turns during ordinary work (review round 2).
+        await self._invoke(argv, ok=(0, _RSYNC_VANISHED))
         return reconcile
 
     async def pack(self, item_id: str, workspace_dir: Path) -> bool:
@@ -334,10 +341,16 @@ class NfsArchive:
         await asyncio.to_thread(_empty_dir, target)
         return False
 
-    async def _invoke(self, argv: list[str]) -> None:
+    async def _invoke(self, argv: list[str], *, ok: tuple[int, ...] = (0,)) -> None:
         rc, stderr = await self._run(argv)
-        if rc != 0:
+        if rc not in ok:
             raise RsyncError(rc, stderr)
+        if rc:
+            logger.info(
+                "archive: rsync exited %d, counted as done: %s",
+                rc,
+                stderr.decode(errors="replace").strip(),
+            )
 
     async def _default_run(self, argv: list[str]) -> tuple[int, bytes]:
         proc = await asyncio.create_subprocess_exec(
