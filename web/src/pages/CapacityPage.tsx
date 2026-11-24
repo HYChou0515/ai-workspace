@@ -14,6 +14,7 @@ import { useState } from "react";
 
 import { qk } from "../api/queryKeys";
 import {
+  type ArchiveSpace,
   CAPACITY_DAYS,
   type CapacityClient,
   type CapacityDays,
@@ -25,9 +26,11 @@ import { Overview } from "../capacity/views/Overview";
 import { Thresholds } from "../capacity/views/Thresholds";
 import { Trends } from "../capacity/views/Trends";
 import { WhatIf } from "../capacity/views/WhatIf";
+import { Gauge } from "../components/Gauge";
 import { Tabs } from "../components/ShareTabs";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useIsSuperuserState } from "../hooks/useIsSuperuser";
+import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
 type Tab = "overview" | "allocation" | "trends" | "whatif" | "thresholds";
@@ -46,6 +49,14 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
     enabled: isSuperuser,
     retry: false,
     staleTime: 60_000,
+    meta: { silentError: true },
+  });
+  const archive = useQuery({
+    queryKey: qk.capacityArchive(),
+    queryFn: () => client.archive(),
+    enabled: isSuperuser,
+    retry: false,
+    staleTime: 30_000,
     meta: { silentError: true },
   });
   const refresh = useMutation({
@@ -71,6 +82,7 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
       <div className="capacity-wrap">
         <h1 className="capacity-h1">{t("capacity.title")}</h1>
         <p className="capacity-subtitle">{t("capacity.subtitle")}</p>
+        {archive.data?.configured && <ArchiveLine space={archive.data} t={t} />}
         <div className="capacity-controls">
           <Segmented
             label={t("capacity.period")}
@@ -122,6 +134,28 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
           {summary && tab === "thresholds" && <Thresholds summary={summary} t={t} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** docs/plan-archive-full.md D6: the sandbox archive — every item's work once its
+ *  sandbox is gone — as used of total, how much is left, and the two floors (D3,
+ *  D4). Above the tabs, so no tab hides it. The shared `Gauge` (the one
+ *  `/my-resources` draws), not a second bar. */
+function ArchiveLine({ space, t }: { space: ArchiveSpace; t: ReturnType<typeof useT> }) {
+  const total = space.total ?? 0;
+  const free = space.free ?? 0;
+  const pct = total ? ((100 * free) / total).toFixed(1) : "0.0";
+  return (
+    <div className="capacity-archive" data-testid="capacity-archive">
+      <Gauge label={t("capacity.archive.label")} used={total - free} limit={total} format={formatBytes} />
+      <p className="capacity-sub">
+        {t("capacity.archive.detail", {
+          pct,
+          warn: Math.round(space.warn_free_ratio * 100),
+          block: Math.round(space.block_free_ratio * 100),
+        })}
+      </p>
     </div>
   );
 }

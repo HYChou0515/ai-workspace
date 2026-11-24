@@ -15,6 +15,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 from ..capacity.service import PERIODS, CapacityService, TooManyRows
+from .archive_health import ArchiveSpace
 
 # ── the summary (views 1, 2, 4, 5, 8, 9) ─────────────────────────────────────
 
@@ -324,6 +325,18 @@ class WhatIfOut(BaseModel):
     ready: bool
 
 
+class ArchiveSpaceOut(BaseModel):
+    """docs/plan-archive-full.md D6: the sandbox archive's use, and the two
+    floors it is held to. `configured` False ⇒ no archive on this deploy (D8)
+    and the numbers are absent, not zero."""
+
+    configured: bool
+    free: int | None = None
+    total: int | None = None
+    warn_free_ratio: float
+    block_free_ratio: float
+
+
 def register_capacity_routes(
     app: FastAPI | APIRouter,
     *,
@@ -331,6 +344,9 @@ def register_capacity_routes(
     get_user_id: Callable[[], str],
     superusers: frozenset[str],
     sandbox_measured: bool | None = None,
+    archive_space: ArchiveSpace | None = None,
+    archive_warn_free_ratio: float = 0.2,
+    archive_block_free_ratio: float = 0.1,
 ) -> None:
     def _require_superuser() -> None:
         if get_user_id() not in superusers:
@@ -380,3 +396,21 @@ def register_capacity_routes(
         _require_superuser()
         service.drop(_period(days))
         return Response(status_code=204)
+
+    @app.get("/admin/capacity/archive", response_model=ArchiveSpaceOut)
+    async def capacity_archive() -> ArchiveSpaceOut:
+        """Its own route, not a field of the summary: the summary is a whole
+        period's analysis that can be slow or refuse, and this is the line that
+        has to be there the day the archive is full."""
+        _require_superuser()
+        free: int | None = None
+        total: int | None = None
+        if archive_space is not None:
+            free, total = await archive_space.measure()
+        return ArchiveSpaceOut(
+            configured=archive_space is not None,
+            free=free,
+            total=total,
+            warn_free_ratio=archive_warn_free_ratio,
+            block_free_ratio=archive_block_free_ratio,
+        )

@@ -6,9 +6,7 @@ import type { AgentEvent } from "../events";
 import { QueryWrap } from "../test/queryWrapper";
 import { type BroadcastChatTransport, useChatSession } from "./useChatSession";
 
-vi.mock("../api", () => ({
-  api: { getCurrentUser: vi.fn().mockResolvedValue("tester") },
-}));
+vi.mock("../api", () => ({ api: { getCurrentUser: vi.fn().mockResolvedValue("tester") } }));
 
 /**
  * The broadcast state machine is exercised through `useAgent` / `useItemChat`
@@ -20,9 +18,7 @@ vi.mock("../api", () => ({
 
 const THREAD = { messages: [{ role: "user" as const, content: "q" }] };
 
-function fakeTransport(
-  over: Partial<BroadcastChatTransport> = {},
-): BroadcastChatTransport {
+function fakeTransport(over: Partial<BroadcastChatTransport> = {}): BroadcastChatTransport {
   return {
     threadKey: "c1",
     queryKey: ["chat", "c1"],
@@ -55,9 +51,7 @@ describe("useChatSession", () => {
   // the file tree and NOT be folded into the conversation, or a human's edit
   // would appear as a chat entry.
   it("routes file_changed to the file tree instead of the log", async () => {
-    const events: AgentEvent[] = [
-      { type: "file_changed", path: "/a.txt" } as AgentEvent,
-    ];
+    const events: AgentEvent[] = [{ type: "file_changed", path: "/a.txt" } as AgentEvent];
     const t = fakeTransport({
       subscribe: async function* () {
         for (const ev of events) yield ev;
@@ -66,11 +60,9 @@ describe("useChatSession", () => {
     });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1)); // only the hydrated msg
-    expect(
-      result.current.log.entries.every(
-        (e) => e.kind !== "message" || e.message.role === "user",
-      ),
-    ).toBe(true);
+    expect(result.current.log.entries.every((e) => e.kind !== "message" || e.message.role === "user")).toBe(
+      true,
+    );
   });
 
   // The tree is a pruned preload plus lazily-listed folders; a human's edit
@@ -89,20 +81,13 @@ describe("useChatSession", () => {
     const t = fakeTransport({
       fileScopeId: "it",
       subscribe: async function* () {
-        yield {
-          type: "file_changed",
-          path: "/node_modules/x.js",
-        } as AgentEvent;
+        yield { type: "file_changed", path: "/node_modules/x.js" } as AgentEvent;
         await new Promise<void>(() => {});
       },
     });
     renderHook(() => useChatSession(t, 60_000), { wrapper });
-    await waitFor(() =>
-      expect(qc.getQueryState(["files", "it"])?.isInvalidated).toBe(true),
-    );
-    expect(
-      qc.getQueryState(["treeDir", "it", "/node_modules"])?.isInvalidated,
-    ).toBe(true);
+    await waitFor(() => expect(qc.getQueryState(["files", "it"])?.isInvalidated).toBe(true));
+    expect(qc.getQueryState(["treeDir", "it", "/node_modules"])?.isInvalidated).toBe(true);
   });
 
   // A turn in ANY of the item's chats ended (the backend says so on the item's
@@ -168,9 +153,7 @@ describe("useChatSession", () => {
       },
     });
     const { result } = renderHook(() => useChatSession(t, 60_000), { wrapper });
-    await waitFor(() =>
-      expect(qc.getQueryData(["todos", "c1"])).toEqual(items),
-    );
+    await waitFor(() => expect(qc.getQueryData(["todos", "c1"])).toEqual(items));
     // Only the hydrated user message — the todo event added no entry.
     expect(result.current.log.entries).toHaveLength(1);
   });
@@ -199,10 +182,7 @@ describe("useChatSession", () => {
         { role: "goal" as const, content: "目標已達成:done" },
       ],
     };
-    const getThread = vi
-      .fn()
-      .mockResolvedValueOnce(THREAD)
-      .mockResolvedValue(MARKED);
+    const getThread = vi.fn().mockResolvedValueOnce(THREAD).mockResolvedValue(MARKED);
     const t = fakeTransport({
       getThread,
       goalKey: ["goal", "c1"],
@@ -213,21 +193,14 @@ describe("useChatSession", () => {
     });
     const { result } = renderHook(() => useChatSession(t, 60_000), { wrapper });
     await waitFor(() =>
-      expect(qc.getQueryData(["goal", "c1"])).toEqual({
-        goal: met,
-        checker_enabled: false,
-      }),
+      expect(qc.getQueryData(["goal", "c1"])).toEqual({ goal: met, checker_enabled: false }),
     );
     // met ⇒ thread re-read AND reconciled into the visible log, so the persisted
     // `role="goal"` marker appears live (the #613 live probe: it only showed
     // after a manual reload when this merely invalidated the cache).
+    await waitFor(() => expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2));
     await waitFor(() =>
-      expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
-    await waitFor(() =>
-      expect(
-        result.current.log.entries.some((e) => e.kind === "goal_note"),
-      ).toBe(true),
+      expect(result.current.log.entries.some((e) => e.kind === "goal_note")).toBe(true),
     );
   });
 
@@ -243,9 +216,7 @@ describe("useChatSession", () => {
     });
     render(t);
     // Once for hydration, again for the terminal re-read.
-    await waitFor(() =>
-      expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
+    await waitFor(() => expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
   // An empty thread must leave an empty log rather than throwing — a brand-new
@@ -260,29 +231,15 @@ describe("useChatSession", () => {
   it("draws an event once even when it is delivered twice", async () => {
     const t = fakeTransport({
       subscribe: async function* () {
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "hi",
-          created_at: 1,
-          id: "e1",
-        } as AgentEvent;
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "hi",
-          created_at: 1,
-          id: "e1",
-        } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
         await new Promise<void>(() => {});
       },
     });
 
     const { result } = render(t);
 
-    await waitFor(() =>
-      expect(result.current.log.entries.length).toBeGreaterThan(0),
-    );
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
     expect(result.current.log.entries).toHaveLength(1);
   });
 
@@ -291,20 +248,8 @@ describe("useChatSession", () => {
     // come from the id and never from the content.
     const t = fakeTransport({
       subscribe: async function* () {
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "hi",
-          created_at: 1,
-          id: "e1",
-        } as AgentEvent;
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "hi",
-          created_at: 1,
-          id: "e2",
-        } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e1" } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1, id: "e2" } as AgentEvent;
         await new Promise<void>(() => {});
       },
     });
@@ -319,18 +264,8 @@ describe("useChatSession", () => {
     // would blank the stream for the length of the rollout.
     const t = fakeTransport({
       subscribe: async function* () {
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "hi",
-          created_at: 1,
-        } as AgentEvent;
-        yield {
-          type: "user_message",
-          author: "u",
-          content: "yo",
-          created_at: 2,
-        } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "hi", created_at: 1 } as AgentEvent;
+        yield { type: "user_message", author: "u", content: "yo", created_at: 2 } as AgentEvent;
         await new Promise<void>(() => {});
       },
     });
@@ -341,9 +276,7 @@ describe("useChatSession", () => {
   });
 
   it("tolerates a transport with no persisted thread", async () => {
-    const { result } = render(
-      fakeTransport({ getThread: vi.fn().mockResolvedValue(null) }),
-    );
+    const { result } = render(fakeTransport({ getThread: vi.fn().mockResolvedValue(null) }));
     await waitFor(() => expect(result.current.log.entries).toHaveLength(0));
     expect(result.current.log.streaming).toBe(false);
   });
@@ -363,16 +296,13 @@ describe("useChatSession", () => {
     // docs/plan-env-request-card.md D8: a `request_env` card retires on this
     // mark — and must come back when the server refuses the Retry.
     const answering = (log: typeof result.current.log) =>
-      log.entries.filter(
-        (e) => e.kind === "message" && e.message.answers === "c1",
-      );
+      log.entries.filter((e) => e.kind === "message" && e.message.answers === "c1");
     let release: (v: unknown) => void = () => {};
     const t = fakeTransport({
       post: vi.fn(
         () =>
           new Promise<void>((_resolve, reject) => {
-            release = () =>
-              reject(Object.assign(new Error("full"), { status: 507 }));
+            release = () => reject(Object.assign(new Error("full"), { status: 507 }));
           }),
       ),
     });
@@ -404,9 +334,7 @@ describe("useChatSession", () => {
   // An aborted POST is the user navigating away, not a turn failure.
   it("send swallows an abort without flagging an error", async () => {
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
-    const { result } = render(
-      fakeTransport({ post: vi.fn().mockRejectedValue(abort) }),
-    );
+    const { result } = render(fakeTransport({ post: vi.fn().mockRejectedValue(abort) }));
     await act(async () => {
       await result.current.send("q");
     });
@@ -420,12 +348,8 @@ describe("useChatSession", () => {
       status: 500,
       code: "request_env_failed",
     });
-    const { result } = render(
-      fakeTransport({ post: vi.fn().mockRejectedValue(failed) }),
-    );
-    await waitFor(() =>
-      expect(result.current.log.entries.length).toBeGreaterThan(0),
-    ); // hydrated
+    const { result } = render(fakeTransport({ post: vi.fn().mockRejectedValue(failed) }));
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0)); // hydrated
     await act(async () => {
       await result.current.send("q");
     });
@@ -472,9 +396,7 @@ describe("useChatSession", () => {
       await result.current.mention(["bob"], "look");
     });
     expect(t.addMention).toHaveBeenCalledWith(["bob"], "look");
-    expect(result.current.log.entries.some((e) => e.kind === "mention")).toBe(
-      true,
-    );
+    expect(result.current.log.entries.some((e) => e.kind === "mention")).toBe(true);
   });
 
   // #739: the context gauge hydrates once on mount, so without a refetch at the
@@ -520,9 +442,7 @@ describe("useChatSession", () => {
       },
     });
     renderHook(() => useChatSession(t, 60_000), { wrapper });
-    await waitFor(() =>
-      expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true),
-    );
+    await waitFor(() => expect(qc.getQueryState(qk.llmBudget)?.isInvalidated).toBe(true));
   });
 });
 
@@ -588,9 +508,7 @@ describe("stopping", () => {
     // (`sendRefusal`) and disabling both buttons until a reload. Offline, that
     // is one click away.
     const t = fakeTransport({
-      requestCancel: vi.fn(() =>
-        Promise.reject(new TypeError("Failed to fetch")),
-      ),
+      requestCancel: vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))),
     });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
@@ -793,10 +711,7 @@ describe("following a turn started elsewhere", () => {
   };
 
   it("reads the store until the reply is there", async () => {
-    const getThread = vi
-      .fn()
-      .mockResolvedValueOnce(ASKED)
-      .mockResolvedValue(ANSWERED);
+    const getThread = vi.fn().mockResolvedValueOnce(ASKED).mockResolvedValue(ANSWERED);
     const { result } = render(fakeTransport({ getThread }), 50);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
 
@@ -829,19 +744,21 @@ describe("following a turn started elsewhere", () => {
 });
 
 describe("a send refused because saving is failing", () => {
-  // docs/plan-archive-full.md D1/D2: the archive is refusing this item's
-  // write-backs. The person is told plainly, with the archive's own reason —
-  // not a quota sentence, and not a bare status.
+  // docs/plan-archive-full.md D1–D3: the person is told plainly, with the
+  // archive's own reason or numbers — not a quota sentence, not a bare status.
   const reason =
     'rsync: [receiver] write failed on "/a/f": No space left on device (28)\n' +
     "rsync error: error in file IO (code 11) at receiver.c(657) [receiver=3.5.0]";
 
-  it("says saving is failing, that new work will be lost, and why", async () => {
-    const err = Object.assign(new Error("Insufficient Storage"), {
+  const refused = (code: string, detail: Record<string, unknown>) =>
+    Object.assign(new Error("Insufficient Storage"), {
       status: 507,
-      code: "archive_write_failed",
-      detail: { error: "archive_write_failed", reason },
+      code,
+      detail: { error: code, ...detail },
     });
+
+  it("says saving is failing, that new work will be lost, and why", async () => {
+    const err = refused("archive_write_failed", { reason });
     const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
     const { result } = render(t);
     await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
@@ -860,15 +777,10 @@ describe("a send refused because saving is failing", () => {
   it("says the archive is nearly full, with how much is left, when below its floor", async () => {
     // D3: every item is refused before the archive is full; the numbers are the
     // reason. 1 GiB of 20 GiB is 5%, under a 10% floor.
-    const err = Object.assign(new Error("Insufficient Storage"), {
-      status: 507,
-      code: "archive_space_low",
-      detail: {
-        error: "archive_space_low",
-        free: 1024 ** 3,
-        total: 20 * 1024 ** 3,
-        block_free_ratio: 0.1,
-      },
+    const err = refused("archive_space_low", {
+      free: 1024 ** 3,
+      total: 20 * 1024 ** 3,
+      block_free_ratio: 0.1,
     });
     const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
     const { result } = render(t);

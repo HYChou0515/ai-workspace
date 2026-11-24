@@ -2501,6 +2501,9 @@ def create_app(
         get_user_id=get_user_id,
         superusers=superusers,
         sandbox_measured=_sandbox_measured(sandbox),
+        archive_space=archive_space,
+        archive_warn_free_ratio=archive_warn_free_ratio,
+        archive_block_free_ratio=archive_block_free_ratio,
     )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts

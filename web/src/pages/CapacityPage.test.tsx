@@ -46,6 +46,13 @@ function client(over: Partial<CapacityClient> = {}): CapacityClient {
     person: vi.fn(async () => personFixture as unknown as Person),
     whatif: vi.fn(async () => whatifFixture as unknown as WhatIf),
     refresh: vi.fn(async () => {}),
+    archive: vi.fn(async () => ({
+      configured: false,
+      free: null,
+      total: null,
+      warn_free_ratio: 0.2,
+      block_free_ratio: 0.1,
+    })),
     ...over,
   } as CapacityClient;
 }
@@ -137,5 +144,45 @@ describe("CapacityPage", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "試算與時程" }));
 
     await waitFor(() => expect(c.summary).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("CapacityPage — the sandbox archive (docs/plan-archive-full.md D6)", () => {
+  const GiB = 1024 ** 3;
+
+  it("shows how much of the archive is used, how much is left, and its floors", async () => {
+    const c = client({
+      archive: vi.fn(async () => ({
+        configured: true,
+        free: 3 * GiB,
+        total: 20 * GiB,
+        warn_free_ratio: 0.2,
+        block_free_ratio: 0.1,
+      })),
+    });
+    renderPage(c);
+
+    const line = await screen.findByTestId("capacity-archive");
+    expect(within(line).getByText(/沙盒存檔空間|Sandbox archive/)).toBeInTheDocument();
+    expect(within(line).getByText("17.0 GB / 20.0 GB")).toBeInTheDocument();
+    expect(line).toHaveTextContent("15.0%");
+    expect(line).toHaveTextContent("20%");
+    expect(line).toHaveTextContent("10%");
+    expect(within(line).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "85");
+  });
+
+  it("shows nothing for a deploy with no archive", async () => {
+    const c = client();
+    renderPage(c);
+    await waitFor(() => expect(c.archive).toHaveBeenCalled());
+    expect(screen.queryByTestId("capacity-archive")).not.toBeInTheDocument();
+  });
+
+  it("asks nothing of the server for anyone but a superuser", async () => {
+    SUPER.current = false;
+    const c = client();
+    renderPage(c);
+    await screen.findByRole("status");
+    expect(c.archive).not.toHaveBeenCalled();
   });
 });

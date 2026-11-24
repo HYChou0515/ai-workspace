@@ -51,11 +51,9 @@ export const QUOTA_DIMENSION_KEY = {
   memory: "resources.memory",
 } as const;
 
-export function quotaAmounts(detail: QuotaDetail | undefined): {
-  used: string;
-  limit: string;
-  dimension?: keyof typeof QUOTA_DIMENSION_KEY;
-} | null {
+export function quotaAmounts(
+  detail: QuotaDetail | undefined,
+): { used: string; limit: string; dimension?: keyof typeof QUOTA_DIMENSION_KEY } | null {
   if (!detail) return null;
   const isEnv = detail.error === "sandbox_quota_exceeded";
   const cap = isEnv ? detail.limit : detail.quota;
@@ -71,11 +69,7 @@ export function quotaAmounts(detail: QuotaDetail | undefined): {
     isEnv && detail.dimension && detail.dimension in QUOTA_DIMENSION_KEY
       ? (detail.dimension as keyof typeof QUOTA_DIMENSION_KEY)
       : undefined;
-  return {
-    used: render(detail.used),
-    limit: render(cap),
-    ...(dimension ? { dimension } : {}),
-  };
+  return { used: render(detail.used), limit: render(cap), ...(dimension ? { dimension } : {}) };
 }
 
 /**
@@ -91,10 +85,7 @@ export const QUOTA_ALSO_KEY = {
   user: "resources.also.user",
 } as const;
 
-export function quotaKind(
-  status: number | undefined,
-  code: string | undefined,
-): QuotaKind {
+export function quotaKind(status: number | undefined, code: string | undefined): QuotaKind {
   if (status !== 507) return null;
   if (code === "user_quota_exceeded") return "user";
   if (code === "sandbox_quota_exceeded") return "environment";
@@ -122,20 +113,20 @@ export function quotaKinds(
 ): QuotaKind[] {
   const primary = quotaKind(status, code);
   if (!primary) return [];
-  return [
-    primary,
-    ...(also ?? []).map((c) => quotaKind(status, c)).filter((k) => k !== null),
-  ];
+  return [primary, ...(also ?? []).map((c) => quotaKind(status, c)).filter((k) => k !== null)];
 }
 
+
 /**
- * A turn refused because saving is failing (docs/plan-archive-full.md D1/D2),
- * as the sentence to show — or null for any other refusal.
+ * A turn refused because saving is failing (docs/plan-archive-full.md D1–D3), as
+ * the sentence to show — or null for any other refusal.
  *
  * Not one of the `QuotaKind`s on purpose: those are limits the person can free
  * (delete here, delete elsewhere, close one), and every surface words each of
- * them. This one has no remedy of the person's own and only a turn can meet it,
- * so it is worded once, with the archive's reason as it came.
+ * them. These have no remedy of the person's own and only a turn can meet them,
+ * so they are worded once: this item's write-backs are refused (with the
+ * archive's reason as it came), or the whole archive is below its floor (with
+ * the numbers, which are the reason).
  */
 export function archiveRefusal(
   t: (key: MsgKey, vars?: Vars) => string,
@@ -153,25 +144,17 @@ export function archiveRefusal(
   if (err?.status !== 507) return null;
   const code = err.code ?? err.detail?.error;
   if (code === "archive_write_failed") {
-    const reason =
-      typeof err.detail?.reason === "string" ? err.detail.reason : "";
-    return {
-      kind: code,
-      headline: t("chat.send.archiveFailing", { reason }),
-      reason,
-    };
+    const reason = typeof err.detail?.reason === "string" ? err.detail.reason : "";
+    return { kind: code, headline: t("chat.send.archiveFailing", { reason }), reason };
   }
   if (code === "archive_space_low") {
-    // D3: the whole archive is below its floor. The numbers ARE the reason.
     const { free, total, block_free_ratio: floor } = err.detail ?? {};
-    if (typeof free !== "number" || typeof total !== "number" || !total)
-      return null;
-    const vars = {
+    if (typeof free !== "number" || typeof total !== "number" || !total) return null;
+    const headline = t("chat.send.archiveLow", {
       free: formatBytes(free),
       pct: ((100 * free) / total).toFixed(1),
       floor: typeof floor === "number" ? Math.round(floor * 100) : "",
-    };
-    const headline = t("chat.send.archiveLow", vars);
+    });
     return { kind: code, headline, reason: headline };
   }
   return null;
@@ -189,23 +172,14 @@ export function archiveRefusal(
 export function quotaMessage(
   t: (key: MsgKey, vars?: Vars) => string,
   leadKey: Record<NonNullable<QuotaKind>, MsgKey>,
-  err: {
-    status?: number;
-    code?: string;
-    also?: string[];
-    detail?: QuotaDetail;
-  } | null,
+  err: { status?: number; code?: string; also?: string[]; detail?: QuotaDetail } | null,
 ): string | null {
   // `code` is the field every caller has always carried; `detail` is the whole
   // body and only some paths pass it. Reading `detail` ALONE silently demoted
   // every caller that did not to the code-less default — the right sentence has
   // to survive a caller that only knows the code.
   const code = err?.code ?? err?.detail?.error;
-  const [lead, ...rest] = quotaKinds(
-    err?.status,
-    code,
-    err?.also ?? err?.detail?.also,
-  );
+  const [lead, ...rest] = quotaKinds(err?.status, code, err?.also ?? err?.detail?.also);
   if (!lead) return null;
   const amounts = quotaAmounts(err?.detail);
   const numbers = !amounts
@@ -218,8 +192,6 @@ export function quotaMessage(
         })}`
       : ` ${t("resources.usedOfLimit", { used: amounts.used, limit: amounts.limit })}`;
   const head = t(leadKey[lead]) + numbers;
-  const also = rest.filter(
-    (k): k is keyof typeof QUOTA_ALSO_KEY => k !== null && k in QUOTA_ALSO_KEY,
-  );
+  const also = rest.filter((k): k is keyof typeof QUOTA_ALSO_KEY => k !== null && k in QUOTA_ALSO_KEY);
   return [head, ...also.map((k) => t(QUOTA_ALSO_KEY[k]))].join(" ");
 }

@@ -15,12 +15,7 @@ import { publishFileChanged } from "../lib/fileChangedBus";
 import { refreshBudgetAfterTurn } from "../lib/llmBudget";
 import { publishTurnEnded } from "../lib/turnEndedBus";
 import type { MsgKey } from "../lib/i18n";
-import {
-  archiveRefusal,
-  type QuotaDetail,
-  type QuotaKind,
-  quotaMessage,
-} from "../lib/quotaFailure";
+import { archiveRefusal, type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { invalidateTree } from "./invalidateTree";
 import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
@@ -172,8 +167,7 @@ const SEEN_IDS_MAX = 2000;
 
 const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
-const isAbort = (err: unknown) =>
-  (err as { name?: string } | null)?.name === "AbortError";
+const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
 /** The transient "you may have missed a piece" notice, shown while a dropped
  * stream reconnects — and only when a turn was actually being written.
@@ -278,18 +272,12 @@ export function useChatSession(
           // subscribed is not the same as receiving, and a socket that opens and
           // immediately dies would otherwise reset the counter every cycle and
           // make a sustained outage look like an endless first blip.
-          setConnection((c) =>
-            c.state === "live" ? c : { ...c, state: "live", error: null },
-          );
-          for await (const ev of transport.subscribe(
-            controller.signal,
-            since,
-          )) {
+          setConnection((c) => (c.state === "live" ? c : { ...c, state: "live", error: null }));
+          for await (const ev of transport.subscribe(controller.signal, since)) {
             backoff = 1000; // a healthy stream resets the backoff
             // Track the highest broadcast seq so the next reconnect resumes here.
             const seq = eventSeq(ev);
-            if (seq !== undefined && seq > maxSeqRef.current)
-              maxSeqRef.current = seq;
+            if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
             // Already drawn — a replay of something this viewer has. `continue`
             // skips the rest of this iteration, the gap-banner check below
             // INCLUDED (an earlier comment here claimed otherwise); that is why
@@ -318,8 +306,7 @@ export function useChatSession(
             if (firstEventThisConnect) {
               firstEventThisConnect = false;
               if (gapBannerPendingRef.current) {
-                const contiguous =
-                  seq !== undefined && since !== undefined && seq === since + 1;
+                const contiguous = seq !== undefined && since !== undefined && seq === since + 1;
                 if (contiguous) {
                   setLog((prev) => {
                     const last = prev.entries[prev.entries.length - 1];
@@ -338,12 +325,7 @@ export function useChatSession(
               setConnection((c) =>
                 c.state === "live" && c.attempts === 0 && c.receiving
                   ? c
-                  : {
-                      state: "live",
-                      receiving: true,
-                      error: null,
-                      attempts: 0,
-                    },
+                  : { state: "live", receiving: true, error: null, attempts: 0 },
               );
             }
             // Only a real turn event proves this viewer is on the turn's pod.
@@ -364,31 +346,27 @@ export function useChatSession(
               // event, so it never folds into the log. The tree is the pruned
               // preload plus the lazy folders on screen; `invalidateTree` is the
               // one helper that stales both, shared with the turn-end refresh.
-              if (transport.fileScopeId)
-                void invalidateTree(qc, transport.fileScopeId);
+              if (transport.fileScopeId) void invalidateTree(qc, transport.fileScopeId);
               else void qc.invalidateQueries({ queryKey: transport.filesKey });
               // A tree can re-read whenever it likes; a WUI holding half-entered
               // state cannot, so it is told which file moved and decides for
               // itself. Announced here rather than from the tree's refetch,
               // because that loses the path — and the path is the whole message.
-              if (transport.fileScopeId)
-                publishFileChanged(transport.fileScopeId, ev.path);
+              if (transport.fileScopeId) publishFileChanged(transport.fileScopeId, ev.path);
               continue;
             }
             if (ev.type === "turn_ended") {
               // A turn in one of the item's chats ended — any chat, so this is
               // the one signal the file panes refresh on (`turnEndedBus`). It
               // arrives on the item's stream only; never a transcript entry.
-              if (transport.fileScopeId)
-                publishTurnEnded(transport.fileScopeId);
+              if (transport.fileScopeId) publishTurnEnded(transport.fileScopeId);
               continue;
             }
             if (ev.type === "todos_updated") {
               // #613: the agent rewrote the todo checklist — the event carries
               // the whole new list, so write it straight into the cache (no
               // refetch). Not a transcript event; it never folds into the log.
-              if (transport.todosKey)
-                qc.setQueryData(transport.todosKey, ev.items);
+              if (transport.todosKey) qc.setQueryData(transport.todosKey, ev.items);
               continue;
             }
             if (ev.type === "goal_updated") {
@@ -421,9 +399,7 @@ export function useChatSession(
               gapBannerPendingRef.current = false;
               turnInFlightRef.current = false;
               setLog((prev) =>
-                prev.entries.some(
-                  (e) => e.kind === "banner" && e.text === GAP_BANNER,
-                )
+                prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
                   ? {
                       ...prev,
                       entries: prev.entries.filter(
@@ -476,12 +452,7 @@ export function useChatSession(
         setConnection((c) =>
           c.state === "reconnecting"
             ? c
-            : {
-                state: "reconnecting",
-                receiving: false,
-                error: null,
-                attempts: c.attempts + 1,
-              },
+            : { state: "reconnecting", receiving: false, error: null, attempts: c.attempts + 1 },
         );
         if (stopped) return;
         // Events published while nobody is attached are dropped and never
@@ -505,9 +476,7 @@ export function useChatSession(
         // resolved. An EMPTY thread is a baseline of zero, and every chat's first
         // turn starts there; reading that as "cannot tell" withheld the
         // retraction exactly where a brand-new conversation lives.
-        const cachedBefore = qc.getQueryData<ChatThread | null>(
-          transport.queryKey,
-        );
+        const cachedBefore = qc.getQueryData<ChatThread | null>(transport.queryKey);
         const hadBaseline = cachedBefore !== undefined;
         const persistedBefore = cachedBefore?.messages.length ?? 0;
         setLog((prev) =>
@@ -560,9 +529,7 @@ export function useChatSession(
           if (grew && last !== undefined && last.role === "assistant") {
             gapBannerPendingRef.current = false;
             setLog((prev) =>
-              prev.entries.some(
-                (e) => e.kind === "banner" && e.text === GAP_BANNER,
-              )
+              prev.entries.some((e) => e.kind === "banner" && e.text === GAP_BANNER)
                 ? {
                     ...prev,
                     entries: prev.entries.filter(
@@ -617,9 +584,7 @@ export function useChatSession(
       }
       const snap = logFromMessages(msgs);
       setLog((prev) =>
-        snap.entries.length > prev.entries.length
-          ? { ...snap, streaming: true }
-          : prev,
+        snap.entries.length > prev.entries.length ? { ...snap, streaming: true } : prev,
       );
     },
     // The poll IS the safety net for a cross-pod viewer. If it is failing too,
@@ -710,39 +675,27 @@ export function useChatSession(
         // Every limit that bound (not just the one that fired first) plus the
         // numbers behind it — see `quotaMessage`.
         const quota = quotaMessage(t, CHAT_QUOTA_KEY, {
-          ...(err as {
-            code?: string;
-            also?: string[];
-            detail?: QuotaDetail;
-          } | null),
+          ...(err as { code?: string; also?: string[]; detail?: QuotaDetail } | null),
           status,
         });
-        // docs/plan-archive-full.md D2: saving is failing for this item. Asked
-        // FIRST — it also answers 507, and read as a quota it would send the
-        // person off to delete files that are not the problem.
+        // docs/plan-archive-full.md D2/D3: saving is failing. Asked FIRST — it
+        // also answers 507, and read as a quota it would send the person off to
+        // delete files that are not the problem.
         const archive = archiveRefusal(t, {
           ...(err as { code?: string; detail?: QuotaDetail } | null),
           status,
         });
         const failure =
           archive !== null
-            ? {
-                kind: archive.kind,
-                raw: archive.reason,
-                headline: archive.headline,
-              }
+            ? { kind: archive.kind, raw: archive.reason, headline: archive.headline }
             : quota !== null
-              ? failureFromError(err, "quota", quota)
-              : // #714: the send was refused because the backend could not establish
-                // who is asking. "messages failed: 500" is visible and useless; the
-                // one thing the person can do about it is sign in again.
-                (err as { code?: string } | null)?.code === "request_env_failed"
-                ? failureFromError(
-                    err,
-                    "identity",
-                    t("chat.send.identityUnavailable"),
-                  )
-                : failureFromHttp(err);
+            ? failureFromError(err, "quota", quota)
+            : // #714: the send was refused because the backend could not establish
+              // who is asking. "messages failed: 500" is visible and useless; the
+              // one thing the person can do about it is sign in again.
+              (err as { code?: string } | null)?.code === "request_env_failed"
+              ? failureFromError(err, "identity", t("chat.send.identityUnavailable"))
+              : failureFromHttp(err);
         // Not the turn's error: no turn ran. It says which limit bound and
         // links to it, and it must survive whatever the stream does next.
         setLog((prev) => ({
@@ -773,10 +726,7 @@ export function useChatSession(
           // The gateway-cut branch above still returns early: there the request
           // was cut without an answer, so nothing is known either way, and
           // hiding a message that may be running is the worse lie.
-          entries: retractOwnAsk(prev, {
-            author: currentUser,
-            content: trimmed,
-          }).entries,
+          entries: retractOwnAsk(prev, { author: currentUser, content: trimmed }).entries,
         }));
       }
     },
@@ -834,13 +784,7 @@ export function useChatSession(
         ...prev,
         entries: [
           ...prev.entries,
-          {
-            kind: "mention",
-            by: currentUser,
-            users: userIds,
-            note,
-            at: Date.now(),
-          },
+          { kind: "mention", by: currentUser, users: userIds, note, at: Date.now() },
         ],
       }));
     },
