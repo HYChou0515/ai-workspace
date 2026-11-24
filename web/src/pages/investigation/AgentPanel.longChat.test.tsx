@@ -183,6 +183,9 @@ describe("a streamed token in a long chat", () => {
 
 
 describe("a very long chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
+  // Drawing 1100 rows took 4.0-6.4 s on CI runners — the default 5 s
+  // timed out on master itself under a parallel run. The time is the render's,
+  // not a hang: what this test pins is which rows are drawn.
   it("draws the first 100 and the newest 1000 rows, and the bar between them", () => {
     const entries: AgentEntry[] = [];
     for (let i = 0; i < 1500; i++) entries.push(answer(`row ${i}`));
@@ -201,5 +204,5 @@ describe("a very long chat opens with its middle collapsed (docs/plan-chat-colla
     expect(drawn).not.toContain("row 499");
     expect(drawn).toContain("row 500");
     expect(view.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
-  });
+  }, 20_000);
 });

@@ -103,6 +103,9 @@ describe("a streamed token in a long KB chat", () => {
 });
 
 describe("a very long KB chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
+  // Drawing 1100 rows took 4.0-6.4 s on CI runners — the default 5 s
+  // timed out on master itself under a parallel run. The time is the render's,
+  // not a hang: what this test pins is which rows are drawn.
   it("draws the first 100 and the newest 1000 rows, and the bar between them", async () => {
     const messages = Array.from({ length: 1500 }, (_, i) => ({ role: "assistant", content: `row ${i}` }));
     const client: KbApi = {
@@ -127,10 +130,10 @@ describe("a very long KB chat opens with its middle collapsed (docs/plan-chat-co
     render(<KbChatPanel chatId="c-1" collectionIds={["k"]} hideCollectionPicker client={client} />, {
       wrapper: QueryWrap,
     });
-    await screen.findByText("row 1499");
+    await screen.findByText("row 1499", undefined, { timeout: 15_000 });
     expect(screen.getByText("中間還有 400 則未顯示")).toBeInTheDocument();
     expect(screen.queryByText("row 100")).toBeNull();
     expect(screen.getByText("row 99")).toBeInTheDocument();
     expect(screen.getByText("row 500")).toBeInTheDocument();
-  });
+  }, 20_000);
 });
