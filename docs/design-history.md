@@ -158,6 +158,7 @@
 | [plan-telemetry-retention.md](plan-telemetry-retention.md) | 遙測事件只留 14 天（`observability.telemetry.keep_days`）：完整內容照存，超過的由 `blob-gc` 佇列上的清除 job 分批永久刪除；`seq` 改從最大值接續，清除後重啟不會撞號 |
 | [plan-stop-reliability.md](plan-stop-reliability.md) | Stop 的可靠性 |
 | [plan-archive-pack.md](plan-archive-pack.md) | 回收時把備份多存成一個 `<item>.pack.<gen>-<bytes>.tar`，再開時 NFS 只讀 1 次不讀 89k 次；樹仍是真相、名字帶 gen 自然作廢 |
+| [plan-archive-full.md](plan-archive-full.md) | 沙盒存檔空間（archive PVC）快滿時通知 superuser、低於 10% 擋新對話；某個 item 寫回失敗就擋那個 item 並附 rsync 原文原因；不做重啟前備份、不限制使用者存多少 |
 | [plan-tool-running-version.md](plan-tool-running-version.md) | 第三方工具「沙盒裡實際在跑哪一版」：建立沙盒時把掛的 `{sha, version}` 寫進共用位址列；AI 的工具說明與工具選單改說實際版本，不一致時只告知、選單一顆「關閉沙盒以更新」；查不到當最新 |
 | [plan-capacity-usage.md](plan-capacity-usage.md) | 容量規劃：每個人在每個地方（API、worker、沙盒、Postgres、GPU）用了多少 CPU、記憶體、磁碟、GPU，人更多時要買幾台機器、幾張卡、何時要下單——平台寫用量紀錄並定義四個資料來源介面（實作由運營方補），superuser 才看得到的九個視圖 |
 
