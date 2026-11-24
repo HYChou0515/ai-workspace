@@ -5,9 +5,13 @@ The production incident: the archive PVC filled up, every write-back failed, and
 the only trace was a bare `Internal Server Error` — the reason ("No space left
 on device") stayed in this host's log. The app could not tell anyone why.
 
-`_REAL_ENOSPC` is not invented: it is what rsync 3.5.0 printed, exit 11, when
-`rsync -rlptD --delete` wrote a 300 KB file into a 64 KB tmpfs (captured
-2026-11-24; the integration test next door reproduces it for real)."""
+`_REAL_ENOSPC` is not invented: it is what rsync printed, exit 11, when
+`rsync -rlptD --delete` wrote a 300 KB file into a 64 KB tmpfs — captured
+2026-11-24 in a throwaway image `FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim`
+with `apt-get install rsync` (`rsync --version`: 3.5.0), run with
+`docker run --tmpfs /tiny:size=64k`. Other rsync versions print another
+`receiver.c(N) [receiver=X]`; the message and the exit code are the same. The
+integration test next door reproduces it for real."""
 
 from __future__ import annotations
 
