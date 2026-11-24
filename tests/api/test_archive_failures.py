@@ -17,7 +17,7 @@ from workspace_app.api.archive_health import (
 from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import ArchiveWriteFailed, SandboxHandle
+from workspace_app.sandbox.protocol import ArchiveWriteFailed, SandboxHandle, SandboxSpec
 
 _ENOSPC = 'rsync: [receiver] write failed on "/a/f": No space left on device (28)'
 
@@ -106,3 +106,72 @@ async def test_the_record_comes_back_after_it_was_cleared():
 
     assert await store.reason_of("item-1") == "second"
     assert await store.reason_of("item-2") is None
+
+
+# Review round 1 (D-3): the recheck must ask where the item's sandbox REALLY is.
+# This pod's own session can hold a handle the host already reaped while
+# another pod rebuilt the sandbox under the shared address; "my handle is gone"
+# is not "nothing is live".
+
+
+class _Address:
+    """`IAddressStore.get` only — the recheck reads nothing else."""
+
+    def __init__(self, handle: SandboxHandle | None) -> None:
+        self.handle = handle
+
+    async def get(self, item_id: str) -> SandboxHandle | None:
+        return self.handle
+
+
+class _TwoSandboxes(MockSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.refuse: dict[str, str] = {}
+        self.written: list[str] = []
+
+    async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+        self._require(handle)  # a reaped handle is SandboxNotFound, as on the host
+        if handle.id in self.refuse:
+            raise ArchiveWriteFailed(self.refuse[handle.id])
+        self.written.append(handle.id)
+
+
+async def test_a_stale_session_handle_does_not_clear_a_live_sandboxs_refusal():
+    store = _store()
+    sandbox = _TwoSandboxes()
+    live = await sandbox.create(SandboxSpec())  # rebuilt by another pod
+    sandbox.refuse[live.id] = _ENOSPC
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        host_managed_durable=True,
+        archive_failures=store,
+        address=_Address(live),  # ty: ignore[invalid-argument-type]
+    )
+    session = await registry.session("item-1")
+    session.handle = SandboxHandle(id="reaped-long-ago")  # this pod's stale view
+    await store.record("item-1", _ENOSPC)
+
+    await registry.recheck_archive("item-1")
+
+    assert await store.reason_of("item-1") == _ENOSPC
+
+
+async def test_a_recheck_that_lands_on_the_live_sandbox_clears_it():
+    store = _store()
+    sandbox = _TwoSandboxes()
+    live = await sandbox.create(SandboxSpec())
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        host_managed_durable=True,
+        archive_failures=store,
+        address=_Address(live),  # ty: ignore[invalid-argument-type]
+    )
+    session = await registry.session("item-1")
+    session.handle = SandboxHandle(id="reaped-long-ago")
+    await store.record("item-1", _ENOSPC)
+
+    await registry.recheck_archive("item-1")
+
+    assert sandbox.written == [live.id]  # cleared because it LANDED, not as moot
+    assert await store.reason_of("item-1") is None

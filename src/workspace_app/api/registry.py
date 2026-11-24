@@ -743,25 +743,36 @@ class InvestigationRegistry:
         safe."""
         if self.archive_failures is None or not self._has_durable:
             return
-        handle = await self.resolve_io_handle(investigation_id)
-        try:
-            if handle is None:
-                raise SandboxNotFound(investigation_id)
-            await self._writeback(investigation_id, handle, delete=False)
-        except SandboxNotFound:
-            logger.info(
-                "registry: item %s has no live sandbox — its archive refusal is moot",
-                investigation_id,
-            )
-            await self.archive_failures.clear(investigation_id)
-        except ArchiveWriteFailed:
-            pass  # recorded again by `_writeback`
-        except Exception:  # noqa: BLE001 — unknown is not "saved": the record stays
-            logger.warning(
-                "registry: could not recheck the archive refusal of item %s",
-                investigation_id,
-                exc_info=True,
-            )
+        # Every place the item's sandbox may be. The shared address first: this
+        # pod's own session can hold a handle the host reaped while another pod
+        # rebuilt the sandbox there (review round 1, D-3) — "my handle is gone"
+        # is not "nothing is live".
+        candidates: list[SandboxHandle] = []
+        if self.address is not None and (published := await self.address.get(investigation_id)):
+            candidates.append(published)
+        mine = await self.resolve_io_handle(investigation_id)
+        if mine is not None and mine not in candidates:
+            candidates.append(mine)
+        for handle in candidates:
+            try:
+                await self._writeback(investigation_id, handle, delete=False)
+                return  # landed: `_writeback` cleared the record
+            except SandboxNotFound:
+                continue  # that one is gone; the next may not be
+            except ArchiveWriteFailed:
+                return  # refused again: recorded again by `_writeback`
+            except Exception:  # noqa: BLE001 — unknown is not "saved": the record stays
+                logger.warning(
+                    "registry: could not recheck the archive refusal of item %s",
+                    investigation_id,
+                    exc_info=True,
+                )
+                return
+        logger.info(
+            "registry: item %s has no live sandbox — its archive refusal is moot",
+            investigation_id,
+        )
+        await self.archive_failures.clear(investigation_id)
 
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now
