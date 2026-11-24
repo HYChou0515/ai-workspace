@@ -62,7 +62,7 @@ import { useChatItem } from "../hooks/chatItem";
 import { CHAT_QUOTA_KEY } from "../hooks/useChatSession";
 import { htmlToMarkdown } from "../lib/htmlToMarkdown";
 import { useT } from "../lib/i18n";
-import { quotaMessage } from "../lib/quotaFailure";
+import { archiveRefusal, type QuotaDetail, quotaMessage } from "../lib/quotaFailure";
 import type { OutsideLookup } from "../renderers/outsideLookup";
 
 const NEW_TAB = "noopener,noreferrer";
@@ -820,10 +820,16 @@ function goLabel(
   return t(again ? "lookup.openAgain" : "lookup.openUrl");
 }
 
-/** What a refused answer says: a full workspace the way a refused chat send
- * says it (the same keys), otherwise the server's own reason. */
+/** What a refused answer says: saving failing, or a full workspace, the way a
+ * refused chat send says it (the same keys), otherwise the server's own reason. */
 function failure(t: ReturnType<typeof useT>, err: unknown): string {
   const status = err instanceof HttpError ? err.status : undefined;
+  // docs/plan-archive-full.md: answering is a turn, so it meets the archive gate.
+  const archive = archiveRefusal(t, {
+    ...(err as { code?: string; detail?: QuotaDetail } | null),
+    status,
+  });
+  if (archive) return archive.headline;
   const quota = quotaMessage(t, CHAT_QUOTA_KEY, {
     ...(err as { code?: string; also?: string[] } | null),
     status,

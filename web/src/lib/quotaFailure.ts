@@ -87,6 +87,10 @@ export const QUOTA_ALSO_KEY = {
 
 export function quotaKind(status: number | undefined, code: string | undefined): QuotaKind {
   if (status !== 507) return null;
+  // docs/plan-archive-full.md: the archive's refusals answer 507 too, and are no
+  // limit the person can free — read as one they sent people off to delete files
+  // that are not the problem. `archiveRefusal` words them.
+  if (code === "archive_write_failed" || code === "archive_space_low") return null;
   if (code === "user_quota_exceeded") return "user";
   if (code === "sandbox_quota_exceeded") return "environment";
   // No code, or the pre-existing one: an older backend, or a body that was not
