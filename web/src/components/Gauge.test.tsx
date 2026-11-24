@@ -10,7 +10,7 @@ afterEach(cleanup);
 describe("Meter", () => {
   // A quantity within a known range is a `meter` (WAI-ARIA 1.2: "a scalar
   // measurement within a known range"); `progressbar` is "the progress status for
-  // tasks", and ARIA says not to use one for the other. Every Gauge is a usage.
+  // tasks", and ARIA says not to use a meter for progress. Every Gauge is a usage.
   it("is a meter whose fill is the used fraction, capped at 100", () => {
     const { rerender } = render(<Meter used={3} limit={6} />);
     const bar = screen.getByRole("meter");

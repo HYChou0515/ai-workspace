@@ -38,12 +38,12 @@
 | D6 | 管理頁 | 容量頁（`/capacity`）標題下一行「沙盒存檔空間：已用 / 總量」，資料來自獨立的 `GET /api/admin/capacity/archive`；畫法是共用的 `Gauge`，語意是 WAI-ARIA 的 `meter`（「a scalar measurement within a known range」；APG 的例子是電量、油量），不是 `progressbar`（「the progress status for tasks」，ARIA 在 meter 一節明說不要拿 meter 表示進度）——review round 1 把共用元件的 role 改成 `meter` | superuser 隨時看得到，不必等通知。不塞進 `/admin/capacity` 的 summary：那是整段期間的分析，可能很慢或因資料太多而拒絕，而這一行是 archive 滿的那天最需要看到的 |
 | D7 | 門檻設定 | `sandbox.durable.warn_free_ratio`（預設 `0.2`）、`sandbox.durable.block_free_ratio`（預設 `0.1`）；`0` 關掉該項 | 預設值是 user 定的；給運營方調整的餘地 |
 | D8 | 沒有 archive 的部署 | `sandbox.durable.nfs_root` 沒設 ⇒ D3–D6 不啟用（開機 log 說一次）；D1–D2 照樣作用在任何寫回失敗 | 量不到就不假裝量得到 |
-| D9 | 擋之前先再確認一次（施工時發現） | 有「寫回被拒」紀錄時，gate 先請 registry 把那個 item 活著的沙盒再寫回一次（只增不刪）：成功 ⇒ 清掉、放行；沒有活著的沙盒 ⇒ 沒有東西還沒存 ⇒ 清掉、放行；又被拒 ⇒ 擋；其他錯誤（host 忙） ⇒ 擋 | 紀錄只會被那個 item 自己的寫回清掉，而寫回只來自握著它 session 的 pod。app rollout 之後沒有 pod 握著它，被擋的對話也不會建立 session——只靠紀錄擋，擴充 PVC 之後這個 item 也會永遠被擋，正好是這次事故的情境 |
+| D9 | 擋之前先再確認一次（施工時發現） | 有「寫回被拒」紀錄時，gate 先請 registry 把那個 item 活著的沙盒再寫回一次（只增不刪）：成功 ⇒ 清掉、放行；沒有活著的沙盒 ⇒ 沒有東西還沒存 ⇒ 清掉、放行；又被拒 ⇒ 擋；其他錯誤（host 忙、找沙盒位置時 store 出錯） ⇒ 擋。例外：**讀紀錄本身**出錯時當作沒有紀錄、放行並記 log（review round 2）——每個部署的每一次送出都會讀，store 一抖就全部 500 比放過一個被拒的 item 糟；放過的那一輪寫回照樣會失敗，回收前的寫回失敗也不會刪沙盒，所以不會因此丟資料 | 紀錄只會被那個 item 自己的寫回清掉，而寫回只來自握著它 session 的 pod。app rollout 之後沒有 pod 握著它，被擋的對話也不會建立 session——只靠紀錄擋，擴充 PVC 之後這個 item 也會永遠被擋，正好是這次事故的情境 |
 
 ## 機制
 
 **寫回失敗的原因要傳得回來（P1）**：host 的 `/persist` 把 archive 的錯誤（`ArchiveError`：rsync 非零結束是它的子類
-`RsyncError`，rsync 之前的小檔寫入失敗——磁碟全滿時最先失敗的就是它——也包成它）回成 JSON 錯誤
+`RsyncError`——exit 24（複製途中有檔案消失）除外：checkpoint 和 turn 結束時算寫回成功，只有回收前的那一次寫回仍算失敗（review round 2、3）；rsync 之前的小檔寫入失敗——磁碟全滿時最先失敗的就是它——也包成它）回成 JSON 錯誤
 （`{"error": "ArchiveWriteFailed", "detail": <原文>}`；`archive_write_failed` 是 app 給前端的 507 code，不是這一個）；
 `HttpSandbox.persist` 把**任何** 5xx 都當成這次寫回沒有發生，丟 `ArchiveWriteFailed(reason)`。舊 host 只回沒有內容的
 500，原因記成 `the sandbox host gave no reason (HTTP 500)`——擋照樣擋。
