@@ -52,3 +52,31 @@ def sandbox_handle(rid: str):
     from sandbox_host.protocol import SandboxHandle
 
     return SandboxHandle(id=rid)
+
+
+async def test_an_archive_already_full_still_says_no_space_left(tmp_path: Path):
+    """Review round 1 (D-1): every write-back AFTER the disk filled — the one
+    whose small bookkeeping write fails before rsync even starts — must name
+    the reason too."""
+    tiny = Path(os.environ["ARCHIVE_TINY_FS"])
+    filler = tiny / "filler.bin"
+    try:
+        with open(filler, "wb") as fh:
+            while True:
+                fh.write(b"x" * 4096)
+                fh.flush()
+    except OSError:
+        pass  # full
+    try:
+        archive = NfsArchive(tiny)
+        sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+        app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as c:
+            rid = (await c.post("/sandboxes", json={"item_id": "item-2"})).json()["remote_id"]
+            (sandbox.workspace_dir(sandbox_handle(rid)) / "a.txt").write_text("work")
+            r = await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
+        assert r.status_code == 500
+        assert r.json()["error"] == "ArchiveWriteFailed"
+        assert "No space left on device" in r.json()["detail"]
+    finally:
+        filler.unlink(missing_ok=True)

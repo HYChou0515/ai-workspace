@@ -77,3 +77,32 @@ async def test_persist_answers_with_the_reason_when_the_archive_refuses(tmp_path
         "error": "ArchiveWriteFailed",
         "detail": failure_reason(11, _REAL_ENOSPC),
     }
+
+
+async def test_persist_answers_with_the_reason_when_the_archive_refuses_before_rsync(
+    tmp_path: Path, monkeypatch
+):
+    """Review round 1 (D-1): on a full disk the FIRST failure is not rsync's.
+    `persist` writes a small generation file onto the archive before it runs
+    rsync; with no space left that write raises ENOSPC, rsync never runs, and
+    the route answered a bare 500 — so after the first failed write-back the
+    reason was gone for the rest of the incident."""
+    import errno
+
+    async def ok(argv: list[str]) -> tuple[int, bytes]:
+        return 0, b""
+
+    archive = NfsArchive(tmp_path / "nfs", runner=ok)
+
+    def full(_item_id: str) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device", str(tmp_path / "nfs" / "x.gen"))
+
+    monkeypatch.setattr(archive, "_new_generation", full)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+    app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-1"})).json()["remote_id"]
+        r = await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
+    assert r.status_code == 500
+    assert r.json()["error"] == "ArchiveWriteFailed"
+    assert "No space left on device" in r.json()["detail"]

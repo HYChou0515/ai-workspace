@@ -67,13 +67,23 @@ def failure_reason(rc: int, stderr: bytes) -> str:
     return "\n".join([*kept, *more, *summary])
 
 
-class RsyncError(RuntimeError):
-    """An rsync invocation exited non-zero. `reason` is what rsync said
-    (`failure_reason`) — the words the app shows when a write-back fails."""
+class ArchiveError(RuntimeError):
+    """The archive refused an operation. `reason` is the words the app shows a
+    person when a write-back fails (docs/plan-archive-full.md D2)."""
+
+    def __init__(self, reason: str, detail: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(detail or reason)
+
+
+class RsyncError(ArchiveError):
+    """An rsync invocation exited non-zero; `reason` is what rsync said
+    (`failure_reason`)."""
 
     def __init__(self, rc: int, stderr: bytes) -> None:
-        self.reason = failure_reason(rc, stderr)
-        super().__init__(f"rsync exited {rc}: {stderr.decode(errors='replace')}")
+        super().__init__(
+            failure_reason(rc, stderr), f"rsync exited {rc}: {stderr.decode(errors='replace')}"
+        )
 
 
 def _check_item(item_id: str) -> str:
@@ -139,8 +149,14 @@ class NfsArchive:
         state after which the tree is a copy of the dir, and so the only one a
         pack may follow."""
         dst = self._item_dir(item_id)
-        await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(self._new_generation, item_id)
+        try:
+            await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(self._new_generation, item_id)
+        except OSError as exc:
+            # docs/plan-archive-full.md review round 1 (D-1): on a full disk this
+            # small bookkeeping write is the FIRST thing to fail, before rsync
+            # runs — and it must say why as plainly as rsync would.
+            raise ArchiveError(str(exc)) from exc
         # #492 safety valve: a ``--delete`` from an EMPTY source over a NON-empty
         # archive wipes durable data — the exact disaster this feature exists to
         # prevent. An empty source is indistinguishable here from a silently-failed
