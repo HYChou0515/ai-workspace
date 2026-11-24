@@ -168,7 +168,7 @@ describe("CapacityPage — the sandbox archive (docs/plan-archive-full.md D6)", 
     expect(line).toHaveTextContent("15.0%");
     expect(line).toHaveTextContent("20%");
     expect(line).toHaveTextContent("10%");
-    expect(within(line).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "85");
+    expect(within(line).getByRole("meter")).toHaveAttribute("aria-valuenow", "85");
   });
 
   it("does not speak of a floor that is switched off", async () => {
@@ -206,7 +206,7 @@ describe("CapacityPage — the sandbox archive (docs/plan-archive-full.md D6)", 
 
     const line = await screen.findByTestId("capacity-archive");
     expect(line).toHaveTextContent(/目前量不到|could not be measured/);
-    expect(within(line).queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(within(line).queryByRole("meter")).not.toBeInTheDocument();
   });
 
   it("shows nothing for a deploy with no archive", async () => {

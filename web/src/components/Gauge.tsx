@@ -28,8 +28,11 @@ export function Meter({ used, limit }: { used: number; limit: number }) {
   // Capped: a quota lowered under a running sandbox puts `used` above `limit`,
   // and the fill must not leave its track.
   const pct = Math.min(100, Math.round((used / limit) * 100));
+  // `meter`, not `progressbar`: a usage is "a scalar measurement within a known
+  // range" (WAI-ARIA 1.2 §meter, which says not to use one for the other);
+  // `progressbar` is "the progress status for tasks".
   return (
-    <div className="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+    <div className="meter" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
       <div className="meter-fill" style={{ width: `${pct}%` }} />
     </div>
   );

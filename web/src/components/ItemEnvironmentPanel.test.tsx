@@ -362,7 +362,7 @@ describe("the shapes it borrows", () => {
   it("draws the owner's totals as TWO named tiles — CPU and memory — with the right figures", () => {
     render(<ItemEnvironmentPanel draft={DRAFT} onDraft={noop} env={IDLE} budget={BUDGET} canEdit />);
     const tiles = screen.getByTestId("budget-gauge");
-    expect(tiles.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    expect(tiles.querySelectorAll('[role="meter"]')).toHaveLength(2);
     expect(tiles.textContent).toContain("2 / 4");
     expect(tiles.textContent).toContain("2.0 GB / 8.0 GB");
   });
