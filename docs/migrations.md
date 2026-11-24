@@ -3891,8 +3891,9 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
   活著的沙盒也放行。**為什麼**：寫不進 archive 的修改只存在 host pod 的磁碟上，下一次重啟就消失。
 - 量不到剩餘空間（mount 出錯或 5 秒沒回應）時不擋，log 印 `archive: could not measure …`；量不到的結果記 30 秒，這段時間不再重量。
 - rsync 回 exit 24（複製途中有檔案消失，例如 `pip install` 的暫存檔）只在定期的增量 checkpoint 算寫回成功。對齊式寫回照升級前
-  一樣算失敗——turn 結束、手動重新整理（`POST …/files/refresh` 回錯）、終端機與 workflow 步驟的寫回、Close（回 500，沙盒留著）、
-  關機和回收（沙盒留著，下一輪回收再試）。那個 item 會記一筆「寫回被拒」，下一次送訊息先重新確認一次（增量寫回，exit 24 算成功）
+  一樣算失敗——turn 結束、手動重新整理（`POST …/files/refresh` 回錯）、終端機與 workflow 步驟的寫回；關閉環境（item 的 Close、
+  資源面板的關閉、刪除 item、釋放跑完的 workflow run：這次關閉算失敗，沙盒留著）；回收（沙盒留著，下一輪回收再試）；app 關機（沙盒留著，
+  等下一個 pod 打開這個 item 時再寫回——沒有人打開的話，host 閒置 `SANDBOX_HOST_IDLE_TTL`（預設 1800 秒）後直接收掉，和升級前一樣）。那個 item 會記一筆「寫回被拒」，下一次送訊息先重新確認一次（增量寫回，exit 24 算成功）
   通常就清掉；同一個 item 還有別的 turn 正在結束、又碰到 exit 24 時，那一次送訊息可能被擋，再送一次即可。host 寫回失敗的 log 是 ERROR（升級前是 uvicorn 印的 ERROR，維持一樣），但文字和 logger 換了：以前是 `uvicorn.error` 的
   `Exception in ASGI application`，現在是 `sandbox_host.app` 的 `host: archive operation failed: <原因>`。**沒改的症狀**：按舊文字或
   logger 名稱設的警報不再響（按 level 設的照樣響）。
