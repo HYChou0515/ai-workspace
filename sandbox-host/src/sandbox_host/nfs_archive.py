@@ -176,15 +176,17 @@ class NfsArchive:
             argv.append("--delete")
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
-        # Exit 24 — "some files vanished before they could be transferred" — on
-        # the ADDITIVE checkpoint is an agent's temp files coming and going
-        # mid-copy (a `pip install`, a test run): everything that still exists
-        # was copied, so it LANDED; read as a refusal it stopped the item's turns
-        # during ordinary work (review round 2). A RECONCILE (``delete``: turn
-        # end, Close, shutdown, reap — the last three destroy the sandbox right
-        # after) keeps it a failure, as before this PR: a file renamed while
-        # rsync ran was never copied under its new name (``--delete`` keeps the
-        # old one), and failing keeps the sandbox (review rounds 3-4).
+        # Exit 24 — "some files vanished before they could be transferred" —
+        # is an agent's temp files coming and going mid-copy (a `pip install`, a
+        # test run). A file renamed while rsync ran may not be copied under its
+        # new name (``--delete`` keeps the old one), so the copy can be short by
+        # what changed during it. On the ADDITIVE checkpoint that is fine: the
+        # sandbox lives on and the next write-back takes it — counted as LANDED,
+        # since read as a refusal it stopped the item's turns during ordinary
+        # work (review round 2). A RECONCILE (``delete``) may be the last copy
+        # before the sandbox goes (Close, reap, a globally idle shutdown), so
+        # there 24 stays a failure, as before this PR, and the sandbox is kept
+        # (review rounds 3-4).
         await self._invoke(argv, ok=(0,) if delete else (0, _RSYNC_VANISHED))
         return reconcile
 

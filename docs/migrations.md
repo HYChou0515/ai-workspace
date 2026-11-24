@@ -3890,9 +3890,10 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
   錯誤原文（例如 `No space left on device`）。開始新對話前會先再試寫回一次（每個候選沙盒最多等 20 秒，最多兩個），成功就放行；那個 item 已經沒有
   活著的沙盒也放行。**為什麼**：寫不進 archive 的修改只存在 host pod 的磁碟上，下一次重啟就消失。
 - 量不到剩餘空間（mount 出錯或 5 秒沒回應）時不擋，log 印 `archive: could not measure …`；量不到的結果記 30 秒，這段時間不再重量。
-- rsync 回 exit 24（複製途中有檔案消失，例如 `pip install` 的暫存檔）只在定期的增量 checkpoint 算寫回成功。對齊式寫回（turn 結束、
-  Close、關機、回收）照升級前一樣算失敗：Close、關機、回收會留下沙盒、下次再試；那個 item 會記一筆「寫回被拒」，下一次送訊息先重新
-  確認一次（增量寫回，exit 24 算成功）就清掉。host 寫回失敗的 log 是 ERROR（升級前是 uvicorn 印的 ERROR，維持一樣），但文字和 logger 換了：以前是 `uvicorn.error` 的
+- rsync 回 exit 24（複製途中有檔案消失，例如 `pip install` 的暫存檔）只在定期的增量 checkpoint 算寫回成功。對齊式寫回照升級前
+  一樣算失敗——turn 結束、手動重新整理（`POST …/files/refresh` 回錯）、終端機與 workflow 步驟的寫回、Close（回 500，沙盒留著）、
+  關機和回收（沙盒留著，下一輪回收再試）。那個 item 會記一筆「寫回被拒」，下一次送訊息先重新確認一次（增量寫回，exit 24 算成功）
+  通常就清掉；同一個 item 還有別的 turn 正在結束、又碰到 exit 24 時，那一次送訊息可能被擋，再送一次即可。host 寫回失敗的 log 是 ERROR（升級前是 uvicorn 印的 ERROR，維持一樣），但文字和 logger 換了：以前是 `uvicorn.error` 的
   `Exception in ASGI application`，現在是 `sandbox_host.app` 的 `host: archive operation failed: <原因>`。**沒改的症狀**：按舊文字或
   logger 名稱設的警報不再響（按 level 設的照樣響）。
 - 同一個 item 同時好幾則訊息送出時，每個 pod 只跑一次重新確認，其他人等它的結果。

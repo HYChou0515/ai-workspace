@@ -115,15 +115,15 @@ async def test_persist_answers_with_the_reason_when_the_archive_refuses_before_r
 async def test_files_vanishing_mid_copy_are_not_a_refused_write_back(tmp_path: Path):
     """Review round 2: an agent's `pip install` or test run creates and deletes
     temp files while a checkpoint copies; rsync then exits 24 ("some files
-    vanished before they could be transferred"). The archive took everything that
-    still exists — a vanished file had nothing left to save — so this ADDITIVE
-    checkpoint landed, not one the archive refused (which stops the item).
+    vanished before they could be transferred"). The sandbox lives on and the
+    next write-back takes whatever changed mid-copy, so this ADDITIVE checkpoint
+    landed, not one the archive refused (which stops the item).
 
-    A reconciling write-back (``delete``) is different (review round 4): a turn
-    end, Close, shutdown and reap all reconcile, and the last three destroy the
-    sandbox right after. A file renamed while rsync ran was never copied under its
-    new name, so there exit 24 stays a failure — as it was before this PR — and
-    the sandbox is kept."""
+    A reconciling write-back (``delete``) is different (review round 4): it may
+    be the last copy before the sandbox goes (Close, reap, a globally idle
+    shutdown), and a file renamed while rsync ran may not have been copied under
+    its new name — so there exit 24 stays a failure, as it was before this PR,
+    and the sandbox is kept."""
 
     async def vanished(argv: list[str]) -> tuple[int, bytes]:
         if argv[0] != "rsync":

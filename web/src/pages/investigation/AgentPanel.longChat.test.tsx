@@ -184,7 +184,7 @@ describe("a streamed token in a long chat", () => {
 
 describe("a very long chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
   // Drawing 1100 rows took 3.6-6.65 s on CI runners — the default 5 s
-  // timed out on master itself under a parallel run. The time is the render's,
+  // timed out locally on origin/master too under a parallel run of src/pages. The time is the render's,
   // not a hang: what this test pins is which rows are drawn.
   it("draws the first 100 and the newest 1000 rows, and the bar between them", () => {
     const entries: AgentEntry[] = [];
