@@ -34,7 +34,9 @@ describe("Gauge", () => {
     render(<Gauge label="CPU" used={1} limit={6} format={String} />);
     expect(screen.getByText("CPU")).toBeInTheDocument();
     expect(screen.getByText("1 / 6")).toBeInTheDocument();
-    expect(screen.getByRole("meter")).toBeInTheDocument();
+    // A meter must have an accessible name (WAI-ARIA 1.2: "Accessible Name
+    // Required"): the label the reader sees beside it.
+    expect(screen.getByRole("meter", { name: "CPU" })).toBeInTheDocument();
   });
 
   it("still shows usage without a limit, with no denominator, no bar, and says so", () => {

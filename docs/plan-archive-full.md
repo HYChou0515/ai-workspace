@@ -30,15 +30,15 @@
 | # | 問題 | 決定 | 為什麼 |
 |---|---|---|---|
 | D1 | 寫回失敗時擋到哪裡 | **那個 item** 不能開始新的對話（聊天、workflow 步驟、排程都走同一個 turn gate），和工作區額度滿一樣回 **507**；刪檔、上傳、編輯不擋。寫回成功一次就自動解除。正在跑的那一輪不中斷 | 不讓存不進去的工作繼續累積；只擋壞掉的那個 item，其他人不被拖下水（user 同意） |
-| D2 | 擋的時候說什麼 | 「目前無法存檔，新的修改會在沙盒重啟時遺失，請聯絡管理員」＋**原因原文**：rsync 的錯誤訊息（有上限長度，取描述錯誤的那段），不翻譯不改寫 | user 要原始原因 |
+| D2 | 擋的時候說什麼 | 「目前無法存檔，新的修改會在沙盒重啟時遺失，請聯絡管理員」＋**原因原文**：rsync 的錯誤訊息（最多留前三行錯誤、一行「還有幾行」和 rsync 的總結那一行；每一行本身不截斷），不翻譯不改寫 | user 要原始原因 |
 | D3 | archive 快滿時先擋 | 剩餘空間低於**容量 10%**，**所有** item 都不能開始新對話；原因寫「沙盒存檔空間剩 X GB（Y%）」 | 在寫不進去之前就停（user 同意）；用比例，因為各部署 PVC 大小差很多 |
 | D4 | 誰先知道 | 低於 **20%** 起，用 `notify()` 通知每個 superuser（`server.superusers`），每跨一級（20%、15%、10%）發一次；回到 20% 以上後重新計算。同時 log 印 warning | 運營方要比使用者早知道，有時間擴 PVC（user 同意） |
-| D5 | 寄信 | 不另做。`notify()` 寫的每一筆都會經 `server.notification_channel`（`INotificationChannel`）轉送；部署方接了寄信實作，superuser 就同時收到信 | 現成的插拔點（`api/notification_delivery.py`） |
-| D6 | 管理頁 | 容量頁（`/capacity`）標題下一行「沙盒存檔空間：已用 / 總量」，資料來自獨立的 `GET /api/admin/capacity/archive`；畫法是共用的 `Gauge`，語意是 WAI-ARIA 的 `meter`（「a scalar measurement within a known range」；APG 的例子是電量、油量），不是 `progressbar`（「the progress status for tasks」，ARIA 明說兩者不互用）——review round 1 把共用元件的 role 改成 `meter` | superuser 隨時看得到，不必等通知。不塞進 `/admin/capacity` 的 summary：那是整段期間的分析，可能很慢或因資料太多而拒絕，而這一行是 archive 滿的那天最需要看到的 |
-| D7 | 門檻設定 | `sandbox.durable.warn_free_ratio`（預設 `0.2`）、`sandbox.durable.block_free_ratio`（預設 `0.1`）；`0` 關掉該項 | 預設值是 user 定的；給運營方調整的餘地 |
-| D9 | 擋之前先再確認一次（施工時發現） | 有「寫回被拒」紀錄時，gate 先請 registry 把那個 item 活著的沙盒再寫回一次（只增不刪）：成功 ⇒ 清掉、放行；沒有活著的沙盒 ⇒ 沒有東西還沒存 ⇒ 清掉、放行；又被拒 ⇒ 擋；其他錯誤（host 忙） ⇒ 擋 | 紀錄只會被那個 item 自己的寫回清掉，而寫回只來自握著它 session 的 pod。app rollout 之後沒有 pod 握著它，被擋的對話也不會建立 session——只靠紀錄擋，擴充 PVC 之後這個 item 也會永遠被擋，正好是這次事故的情境 |
 | D4′ | 「回升」怎麼算（review round 1 修改，待 user 確認） | 20% 這條線不變；回到 20% 以上並**連續維持 30 分鐘**才算這一次結束 | 剩餘空間在 20% 上下來回（rsync 的寫入和刪除就會造成）時，D4 原本的「回到 20% 以上就重新計算」讓每次來回都重發一輪通知（實測 10 次檢查發了 10 則） |
+| D5 | 寄信 | 不另做。`notify()` 寫的每一筆都會經 `server.notification_channel`（`INotificationChannel`）轉送；部署方接了寄信實作，superuser 就同時收到信 | 現成的插拔點（`api/notification_delivery.py`） |
+| D6 | 管理頁 | 容量頁（`/capacity`）標題下一行「沙盒存檔空間：已用 / 總量」，資料來自獨立的 `GET /api/admin/capacity/archive`；畫法是共用的 `Gauge`，語意是 WAI-ARIA 的 `meter`（「a scalar measurement within a known range」；APG 的例子是電量、油量），不是 `progressbar`（「the progress status for tasks」，ARIA 在 meter 一節明說不要拿 meter 表示進度）——review round 1 把共用元件的 role 改成 `meter` | superuser 隨時看得到，不必等通知。不塞進 `/admin/capacity` 的 summary：那是整段期間的分析，可能很慢或因資料太多而拒絕，而這一行是 archive 滿的那天最需要看到的 |
+| D7 | 門檻設定 | `sandbox.durable.warn_free_ratio`（預設 `0.2`）、`sandbox.durable.block_free_ratio`（預設 `0.1`）；`0` 關掉該項 | 預設值是 user 定的；給運營方調整的餘地 |
 | D8 | 沒有 archive 的部署 | `sandbox.durable.nfs_root` 沒設 ⇒ D3–D6 不啟用（開機 log 說一次）；D1–D2 照樣作用在任何寫回失敗 | 量不到就不假裝量得到 |
+| D9 | 擋之前先再確認一次（施工時發現） | 有「寫回被拒」紀錄時，gate 先請 registry 把那個 item 活著的沙盒再寫回一次（只增不刪）：成功 ⇒ 清掉、放行；沒有活著的沙盒 ⇒ 沒有東西還沒存 ⇒ 清掉、放行；又被拒 ⇒ 擋；其他錯誤（host 忙） ⇒ 擋 | 紀錄只會被那個 item 自己的寫回清掉，而寫回只來自握著它 session 的 pod。app rollout 之後沒有 pod 握著它，被擋的對話也不會建立 session——只靠紀錄擋，擴充 PVC 之後這個 item 也會永遠被擋，正好是這次事故的情境 |
 
 ## 機制
 
@@ -50,9 +50,9 @@
 
 **每個 item 的失敗狀態要跨 pod（P2）**：寫回由哪一顆 app pod 做不一定，turn 落在哪一顆也不一定，所以失敗狀態
 存在共用的地方：一個不公開的 specstar model（和 `_SandboxActivity`、`_SandboxAddress` 同一種做法），id 就是
-item id，內容是原因和時間。`registry._writeback` 是唯一寫它的地方：`ArchiveWriteFailed` → 寫入；成功 → 只清
+item id，內容是原因和時間。寫它的有兩處：`registry._writeback`（`ArchiveWriteFailed` → 寫入；成功 → 只清
 **這個 pod 自己記過的**（review round 1：每次成功都清，是每個 warm item 每幾秒、每個 pod 一次 store 呼叫；別的 pod 的紀錄
-由 D9 的再確認在要擋之前處理）。store 自己出錯只記 log，不蓋掉寫回本身的結果。`mirror_warm` 與 `flush` 都經過
+由 D9 的再確認在要擋之前處理）），以及 `recheck_archive`（D9：再確認成功或沒有活著的沙盒 → 清掉，不論是哪個 pod 記的）。store 自己出錯只記 log，不蓋掉寫回本身的結果。`mirror_warm` 與 `flush` 都經過
 `_writeback`，所以 checkpoint 和輪結束的失敗都會被記到。
 
 **turn gate（P3、P4）**：`api/turn_gate.py` 已經是「turn 能不能開始」唯一的地方（`chat_send.send`、
@@ -77,10 +77,10 @@ gate 不擋、watch 跳過這一輪、容量頁寫「目前量不到」；同時
 ## Phases
 
 - **P1** host：`RsyncError` 回 JSON 錯誤帶原文；`HttpSandbox.persist` 丟 `ArchiveWriteFailed(reason)`；舊 host 的 500 也轉成同一個例外（原因寫明沒有回報）
-- **P2** app：每個 item 的寫回失敗狀態（共用 store）；`_writeback` 失敗寫入、成功清除
+- **P2** app：每個 item 的寫回失敗狀態（共用 store）；`_writeback` 失敗寫入、成功時清這個 pod 自己記的（別的 pod 的由 D9 的再確認清）
 - **P3** turn gate：`archive_write_failed` 拒絕新 turn（聊天、workflow、排程）；前端訊息含原因。D9（擋之前先再確認一次）是 P3 的後續 commit
 - **P4** turn gate：剩餘空間低於 `block_free_ratio` 時拒絕所有新 turn（`archive_space_low`）；前端訊息
-- **P5** 通知：低於 `warn_free_ratio` 起每跨一級通知每個 superuser 一次；log warning；回升後重新計算
+- **P5** 通知：低於 `warn_free_ratio` 起每跨一級通知每個 superuser 一次；log warning；回到 `warn` 以上並維持 30 分鐘才重新計算（D4′）
 - **P6** `/admin/capacity` 顯示 archive 已用 / 總量
 - **P7** 文件：`docs/migrations.md` 條目、`docs/configuration.md` 兩個門檻、`docs/deployment.md` 說明通知與寄信插拔點
 

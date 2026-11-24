@@ -23,16 +23,24 @@ export function formatAgainstLimit(
   return limit ? `${render(used)} / ${render(limit)}` : render(used);
 }
 
-export function Meter({ used, limit }: { used: number; limit: number }) {
+export function Meter({ used, limit, label }: { used: number; limit: number; label?: string }) {
   if (!limit) return null;
   // Capped: a quota lowered under a running sandbox puts `used` above `limit`,
   // and the fill must not leave its track.
   const pct = Math.min(100, Math.round((used / limit) * 100));
   // `meter`, not `progressbar`: a usage is "a scalar measurement within a known
-  // range" (WAI-ARIA 1.2 §meter, which says not to use one for the other);
+  // range" (WAI-ARIA 1.2 §meter, which says not to use a meter for progress);
   // `progressbar` is "the progress status for tasks".
   return (
-    <div className="meter" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+    <div
+      className="meter"
+      role="meter"
+      // A meter must be named (WAI-ARIA 1.2, "Accessible Name Required").
+      aria-label={label}
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
       <div className="meter-fill" style={{ width: `${pct}%` }} />
     </div>
   );
@@ -57,7 +65,7 @@ export function Gauge({
         <span className="gauge-value">{formatAgainstLimit(used, limit, format)}</span>
         {limit ? null : <span className="detail">{t("resources.gauge.unlimited")}</span>}
       </p>
-      <Meter used={used} limit={limit} />
+      <Meter used={used} limit={limit} label={label} />
     </div>
   );
 }

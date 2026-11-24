@@ -299,7 +299,7 @@ exec(handle, ["sh", "-lc", f"export WF_TOKEN={token}; {run}"])
 | 讀取逾時 | `SandboxBusy` | pod 活著但**慢**(過載 / 大檔傳輸中) | 冪等操作用**遞增期限**重試;**絕不** rebuild |
 | 連線被拒/重設 | `SandboxNotFound` | pod **沒了** | 從 durable 重建 |
 | 404 + `{"error":…}` | 同上 | host 活著但沒這個 sandbox(已回收) | 同上 |
-| `persist` 回任何 5xx | `ArchiveWriteFailed` | 這次寫回沒有發生:archive 不收(磁碟滿、NFS 出錯)時 host 回 `{"error": "ArchiveWriteFailed", "detail": <錯誤原文>}`;host 自己出錯、ingress 的 502/503、舊 host,原因寫 `the sandbox host gave no reason (HTTP n)` | 記成這個 item「寫回被拒」,它不能開始新對話,畫面附原因;下一次寫回成功、或開始新對話前的那次再試成功,就解除([plan-archive-full](plan-archive-full.md)) |
+| `persist` 回任何 5xx | `ArchiveWriteFailed` | 這次寫回沒有發生:archive 不收(磁碟滿、NFS 出錯)時 host 回 `{"error": "ArchiveWriteFailed", "detail": <錯誤原文>}`;host 自己出錯、舊 host,原因寫 `the sandbox host gave no reason (HTTP n)` | 記成這個 item「寫回被拒」,它不能開始新對話,畫面附原因;開始新對話前會先再試寫回一次,成功(或那個 item 已經沒有活著的沙盒)就解除;記下它的那個 pod 之後寫回成功也會清掉([plan-archive-full](plan-archive-full.md)) |
 
 重試策略只套在**冪等的檔案/探測操作**上:第 n 次嘗試的讀取期限是
 `min(base × factor^(n-1), cap)`,退避同構(預設 4 次、10s 起跳、上限 40s)。一個真的卡死的
