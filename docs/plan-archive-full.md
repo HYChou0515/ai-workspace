@@ -34,8 +34,9 @@
 | D3 | archive 快滿時先擋 | 剩餘空間低於**容量 10%**，**所有** item 都不能開始新對話；原因寫「沙盒存檔空間剩 X GB（Y%）」 | 在寫不進去之前就停（user 同意）；用比例，因為各部署 PVC 大小差很多 |
 | D4 | 誰先知道 | 低於 **20%** 起，用 `notify()` 通知每個 superuser（`server.superusers`），每跨一級（20%、15%、10%）發一次；回到 20% 以上後重新計算。同時 log 印 warning | 運營方要比使用者早知道，有時間擴 PVC（user 同意） |
 | D5 | 寄信 | 不另做。`notify()` 寫的每一筆都會經 `server.notification_channel`（`INotificationChannel`）轉送；部署方接了寄信實作，superuser 就同時收到信 | 現成的插拔點（`api/notification_delivery.py`） |
-| D6 | 管理頁 | `/admin/capacity` 加一行「沙盒存檔空間：已用 / 總量」 | superuser 隨時看得到，不必等通知 |
+| D6 | 管理頁 | 容量頁（`/capacity`）標題下一行「沙盒存檔空間：已用 / 總量」，資料來自獨立的 `GET /api/admin/capacity/archive` | superuser 隨時看得到，不必等通知。不塞進 `/admin/capacity` 的 summary：那是整段期間的分析，可能很慢或因資料太多而拒絕，而這一行是 archive 滿的那天最需要看到的 |
 | D7 | 門檻設定 | `sandbox.durable.warn_free_ratio`（預設 `0.2`）、`sandbox.durable.block_free_ratio`（預設 `0.1`）；`0` 關掉該項 | 預設值是 user 定的；給運營方調整的餘地 |
+| D9 | 擋之前先再確認一次（施工時發現） | 有「寫回被拒」紀錄時，gate 先請 registry 把那個 item 活著的沙盒再寫回一次（只增不刪）：成功 ⇒ 清掉、放行；沒有活著的沙盒 ⇒ 沒有東西還沒存 ⇒ 清掉、放行；又被拒 ⇒ 擋；其他錯誤（host 忙） ⇒ 擋 | 紀錄只會被那個 item 自己的寫回清掉，而寫回只來自握著它 session 的 pod。app rollout 之後沒有 pod 握著它，被擋的對話也不會建立 session——只靠紀錄擋，擴充 PVC 之後這個 item 也會永遠被擋，正好是這次事故的情境 |
 | D8 | 沒有 archive 的部署 | `sandbox.durable.nfs_root` 沒設 ⇒ D3–D6 不啟用（開機 log 說一次）；D1–D2 照樣作用在任何寫回失敗 | 量不到就不假裝量得到 |
 
 ## 機制
@@ -50,9 +51,12 @@ item id，內容是原因和時間。`registry._writeback` 是唯一寫它的地
 `mirror_warm` 與 `flush` 都經過 `_writeback`，所以 checkpoint 和輪結束的失敗都會被記到。
 
 **turn gate（P3、P4）**：`api/turn_gate.py` 已經是「turn 能不能開始」唯一的地方（`chat_send.send`、
-`workflow_exec.drive_turn` 都呼叫它）。新增兩個拒絕理由，和現有的額度拒絕同一個 507、各自的 code：
-`archive_write_failed`（D1，按 item 讀 P2 那一列，一次 by-id 讀取）、`archive_space_low`（D3，`os.statvfs`）。
-前端 `web/src/lib/quotaFailure.ts` 照 code 顯示 D2 的訊息。
+`workflow_exec.drive_turn` 都呼叫它）。兩個 archive 的拒絕由一個 `ArchiveGate`（`api/archive_health.py`）
+回答，兩條路共用同一個物件：先看這個 item 的紀錄（D1，by-id 讀取；有紀錄先照 D9 再確認一次），再看剩餘
+空間（D3，`shutil.disk_usage`，結果快取 30 秒）。和額度拒絕同一個 507、各自的 code：`archive_write_failed`
+（附 `reason`）、`archive_space_low`（附 `free`、`total`、`block_free_ratio`）；不和額度拒絕合併成一句——
+資料已經有風險，額度能不能空出來不改變這件事。前端 `web/src/lib/quotaFailure.ts` 的 `archiveRefusal`
+在額度文案之前判斷（否則會被讀成「workspace 滿了」，叫人去刪無關的檔案）。
 
 **量空間與通知（P5）**：API pod 的 lifecycle 加一個 pod-local 的迴圈（量自己掛的磁碟，符合 #804 的
 「sweeper 只碰 pod-local」）定期 `statvfs`。通知要整個 fleet 只發一次：用 `notify()` 的 `dedup_key`，

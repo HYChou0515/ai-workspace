@@ -775,6 +775,26 @@ print("\n❌ 200 萬字仍正常回答 → 有東西在悄悄截斷,而且偵測
 PY
 ```
 
+
+### 沙盒存檔空間（archive）快滿與寫不進去
+
+沙盒裡正在改的檔案放在 sandbox-host pod **自己的磁碟**上；pod 一換（k8s rollout restart、節點搬遷）就消失，
+留得下來的只有 archive（`SANDBOX_HOST_NFS_ROOT`，app 端是 `sandbox.durable.nfs_root`，同一個 PVC）。
+app 約每 5 秒叫 host 把現場 rsync 進 archive 一次，每輪對話結束再完整同步一次。archive 滿了，這些寫回全部失敗；
+這時重啟 host，滿了之後的修改就全部沒了（[plan-archive-full](plan-archive-full.md) 的事故）。所以平台做三件事：
+
+| 情況 | 誰會知道 | 怎麼知道 |
+|---|---|---|
+| archive 剩餘低於容量的 `warn_free_ratio`（預設 20%） | 每個 `server.superusers` | 鈴鐺通知（`kind: archive_space_low`，標題寫剩幾 %、剩多少 GiB，點了到容量頁）。每跨一級發一次：20%、15%、10%（`warn`、兩者中間、`block`）；回到 20% 以上後下一次跌破重新算。app log 同時印 `archive: … told N superuser row(s)` |
+| 剩餘低於 `block_free_ratio`（預設 10%） | 所有使用者 | **每個** item 都不能開始新的對話（聊天和 workflow 步驟都一樣），回 507 `archive_space_low`，聊天框寫「沙盒存檔空間只剩 X（Y%），低於 10%…請聯絡管理員」。刪檔、上傳照常 |
+| 某個 item 的寫回被 archive 拒絕（磁碟滿、NFS 斷線，不論剩餘比例） | 那個 item 的使用者 | 那個 item 不能開始新的對話，回 507 `archive_write_failed`，聊天框附 **rsync 的錯誤原文**（例如 `No space left on device (28)`）。開始新對話前會先再試寫回一次，成功就放行；那個 item 已經沒有活著的沙盒時也放行（沒有東西還沒存） |
+
+- **要收到信**：`server.notification_channel` 接了寄信實作的部署，superuser 會同時收到信——那個插拔點本來就轉送 `notify()` 寫的每一筆，不必另外設。沒設 `server.superusers` 就沒有人收到通知，其他照常。
+- **隨時看**：容量頁（superuser，`/capacity`）標題下有一行「沙盒存檔空間：已用 / 總量」和剩幾 %；API 是 `GET /api/admin/capacity/archive`。
+- **怎麼量**：app pod 對自己掛的 `nfs_root` 做一次 `disk_usage`。通知每 60 秒檢查一次、每個時間窗只由一個 pod 做；擋新對話時用的數字最多 30 秒前量的。沒有 `sandbox.durable.kind: nfs_tree`（沒有 archive）的部署不量也不擋，開機 log 寫一次 `archive: no sandbox archive configured`。
+- **原因原文**要 sandbox-host 也升到這一版才有；舊 host 只回沒有內容的 500，原因會寫 `the sandbox host gave no reason (HTTP 500)`——擋照樣擋。
+- **擴充之後**：不用重啟。剩餘回到門檻以上，下一則訊息就收（最多晚 30 秒）；被擋的 item 下一次寫回成功就解除。
+
 ---
 
 ## 15. 第三方工具（#674）：上架、換版、退回
