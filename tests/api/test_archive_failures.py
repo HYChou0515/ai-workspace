@@ -86,16 +86,90 @@ async def test_a_write_back_that_lands_clears_the_record():
     assert await store.reason_of("item-1") is None
 
 
-async def test_another_pods_record_is_cleared_by_this_pods_success():
+async def test_another_pods_record_is_settled_by_the_recheck():
     """Pod A's checkpoint failed and recorded it; pod B serves the item and its
-    write-back lands. The record is the item's, not the pod's."""
+    write-back lands. B's routine checkpoints do not read the shared store (that
+    would be a store call per item every few seconds on every pod); the record is
+    settled when it matters — the gate's recheck before a turn would be refused."""
     store = _store()
     await store.record("item-1", _ENOSPC)  # pod A
     registry, _ = await _registry(store)  # pod B, same shared store
 
-    await registry.mirror_warm()
+    await registry.recheck_archive("item-1")
 
     assert await store.reason_of("item-1") is None
+
+
+class _CountingStore(SpecstarArchiveFailures):
+    def __init__(self, spec) -> None:  # noqa: ANN001
+        super().__init__(spec)
+        self.calls = 0
+
+    async def record(self, item_id: str, reason: str) -> None:
+        self.calls += 1
+        await super().record(item_id, reason)
+
+    async def clear(self, item_id: str) -> None:
+        self.calls += 1
+        await super().clear(item_id)
+
+
+async def test_a_write_back_that_was_never_refused_costs_no_store_call():
+    """Review round 1: every successful checkpoint (every few seconds, every warm
+    item, every pod) used to try a delete on the shared store."""
+    spec = make_spec(default_user="u")
+    register_archive_health(spec)
+    store = _CountingStore(spec)
+    registry, _ = await _registry(store)
+
+    await registry.mirror_warm()
+    await registry.mirror_warm()
+
+    assert store.calls == 0
+
+
+class _BrokenStore(SpecstarArchiveFailures):
+    async def record(self, item_id: str, reason: str) -> None:
+        raise RuntimeError("store down")
+
+    async def clear(self, item_id: str) -> None:
+        raise RuntimeError("store down")
+
+
+async def test_a_store_that_errors_does_not_change_what_the_write_back_reports():
+    """The write-back's own outcome is what callers act on (`close_all` keeps a
+    sandbox whose write-back failed): a store error must not stand in for it."""
+    spec = make_spec(default_user="u")
+    register_archive_health(spec)
+    registry, sandbox = await _registry(_BrokenStore(spec))
+    handle = (await registry.session("item-1")).handle
+    assert handle is not None
+
+    await registry._writeback("item-1", handle, delete=False)  # lands: no raise
+    sandbox.refuse = _ENOSPC
+    with contextlib.suppress(ArchiveWriteFailed):
+        await registry._writeback("item-1", handle, delete=False)
+        raise AssertionError("the refusal must surface as ArchiveWriteFailed")
+
+
+async def test_a_recheck_that_hangs_gives_up_and_keeps_the_record():
+    """A hung archive mount must not hang the send that asked: the recheck is
+    bounded, and not knowing is not 'saved'."""
+    import asyncio
+
+    store = _store()
+    registry, sandbox = await _registry(store)
+    registry.archive_recheck_timeout_s = 0.1
+    await store.record("item-1", _ENOSPC)
+    hang = asyncio.Event()
+
+    async def hangs(handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+        await hang.wait()
+
+    sandbox.persist = hangs  # ty: ignore[invalid-assignment]
+    await asyncio.wait_for(registry.recheck_archive("item-1"), 2)
+
+    assert await store.reason_of("item-1") == _ENOSPC
 
 
 async def test_the_record_comes_back_after_it_was_cleared():
