@@ -300,6 +300,11 @@ async def test_a_step_is_refused_while_the_archive_refuses_the_item(
     rid = stack["conv_rm"].create(Conversation(item_id=stack["item_id"])).resource_id
     await ex._registry.archive_failures.record(stack["item_id"], "No space left on device (28)")
 
+    async def still_refused(_item_id: str) -> None:
+        """The gate's one more write-back, refused again: the archive is still full."""
+
+    ex._registry.recheck_archive = still_refused
+
     with pytest.raises(ArchiveRefusing) as caught:
         await ex.drive_turn(
             stack["item_id"],

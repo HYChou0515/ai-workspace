@@ -21,7 +21,7 @@ import datetime as dt
 import logging
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -200,14 +200,22 @@ class ArchiveGate:
         space: ArchiveSpace | None,
         *,
         block_free_ratio: float,
+        recheck: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.failures = failures
         self.space = space
         self.block_free_ratio = block_free_ratio
+        # `InvestigationRegistry.recheck_archive`: one more write-back before a
+        # recorded refusal stops a turn — the record can outlive what it
+        # protects (a rollout leaves nobody to write it back and clear it).
+        self._recheck = recheck
 
     async def check(self, item_id: str) -> None:
-        if self.failures is not None and (reason := await self.failures.reason_of(item_id)):
-            raise ArchiveRefusing(item_id, reason)
+        if self.failures is not None and await self.failures.reason_of(item_id):
+            if self._recheck is not None:
+                await self._recheck(item_id)
+            if reason := await self.failures.reason_of(item_id):
+                raise ArchiveRefusing(item_id, reason)
         if self.space is None or self.block_free_ratio <= 0:
             return
         free, total = await self.space.measure()

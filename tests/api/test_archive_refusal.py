@@ -34,6 +34,7 @@ class _ArchiveSandbox(MockSandbox):
         self.refuse = ""
 
     async def persist(self, handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+        self._require(handle)  # a sandbox that is gone is SandboxNotFound, as on the host
         if self.refuse:
             raise ArchiveWriteFailed(self.refuse)
 
@@ -110,3 +111,36 @@ def test_only_the_refused_item_is_stopped():
         assert (
             client.post(f"/a/rca/items/{other}/messages", json={"content": "x"}).status_code == 202
         )
+
+
+def test_a_record_left_by_another_pod_with_nothing_live_does_not_stop_the_item():
+    """Pod A's checkpoint was refused and recorded; then A was rolled away and the
+    item's sandbox is gone. Nothing of the item is waiting to be saved any more,
+    and no write-back will ever come to clear the record — refusing on it would
+    stop the item for good, even after the archive was extended."""
+    sandbox, runner = _ArchiveSandbox(), _Runner()
+    app, spec, iid = _app(sandbox, runner)
+    import asyncio
+
+    from workspace_app.api.archive_health import SpecstarArchiveFailures
+
+    asyncio.run(SpecstarArchiveFailures(spec).record(iid, _ENOSPC))  # pod A, gone
+    with TestClient(app) as client:
+        assert (
+            client.post(f"/a/rca/items/{iid}/messages", json={"content": "go"}).status_code == 202
+        )
+    assert asyncio.run(SpecstarArchiveFailures(spec).reason_of(iid)) is None
+
+
+def test_once_the_archive_takes_write_backs_again_the_next_send_goes_through():
+    """No other step in between: the gate, seeing the record, tries the item's
+    live sandbox once more before refusing — so extending the archive is the
+    whole remedy."""
+    sandbox, runner = _ArchiveSandbox(), _Runner()
+    app, _spec, iid = _app(sandbox, runner)
+    with TestClient(app) as client:
+        sandbox.refuse = _ENOSPC
+        _write_back(client, iid)  # the sandbox is live, and its write-back is refused
+        sandbox.refuse = ""  # the archive is extended
+
+        assert client.post(f"/a/rca/items/{iid}/messages", json={"content": "b"}).status_code == 202

@@ -727,6 +727,42 @@ class InvestigationRegistry:
         async with session.env_lock:
             await ensure_project_env(self.sandbox, handle, on_output=on_output)
 
+    async def recheck_archive(self, investigation_id: str) -> None:
+        """docs/plan-archive-full.md: settle a recorded refusal once more, before
+        a turn is refused on it.
+
+        The record can outlive what it protects. Its writer is the item's own
+        write-backs, and those come only from a pod holding the item's session
+        — after a rollout, nobody does, and a refused turn never creates one.
+        Refusing on the record alone would stop the item for good, even once the
+        archive was extended. So: write the item's live sandbox back once more
+        (additive, like a checkpoint — a turn may be running). It lands ⇒ the
+        record is cleared (`_writeback`). No sandbox is live ⇒ nothing of the
+        item is waiting to be saved, and the record is cleared too. Refused
+        again ⇒ it stays. Anything else (a busy host) ⇒ it stays: unknown is not
+        safe."""
+        if self.archive_failures is None or not self._has_durable:
+            return
+        handle = await self.resolve_io_handle(investigation_id)
+        try:
+            if handle is None:
+                raise SandboxNotFound(investigation_id)
+            await self._writeback(investigation_id, handle, delete=False)
+        except SandboxNotFound:
+            logger.info(
+                "registry: item %s has no live sandbox — its archive refusal is moot",
+                investigation_id,
+            )
+            await self.archive_failures.clear(investigation_id)
+        except ArchiveWriteFailed:
+            pass  # recorded again by `_writeback`
+        except Exception:  # noqa: BLE001 — unknown is not "saved": the record stays
+            logger.warning(
+                "registry: could not recheck the archive refusal of item %s",
+                investigation_id,
+                exc_info=True,
+            )
+
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now
         (explicit refresh / turn-end). No-op when cold."""

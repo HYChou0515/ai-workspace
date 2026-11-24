@@ -910,7 +910,11 @@ def create_app(
     # …and the one gate both turn paths ask (P3/P4): this item's refusal, then
     # the archive's floor. `archive_space` None ⇒ no archive here (D8).
     archive_gate = ArchiveGate(
-        archive_failures, archive_space, block_free_ratio=archive_block_free_ratio
+        archive_failures,
+        archive_space,
+        block_free_ratio=archive_block_free_ratio,
+        # Late-bound: the registry is built below, and is there by the first turn.
+        recheck=lambda item_id: registry.recheck_archive(item_id),
     )
     if archive_space is None:
         logger.info("archive: no sandbox archive configured — its space is not watched")
