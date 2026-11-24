@@ -328,7 +328,8 @@ class WhatIfOut(BaseModel):
 class ArchiveSpaceOut(BaseModel):
     """docs/plan-archive-full.md D6: the sandbox archive's use, and the two
     floors it is held to. `configured` False ⇒ no archive on this deploy (D8)
-    and the numbers are absent, not zero."""
+    and the numbers are absent, not zero; `configured` with no numbers ⇒ it
+    could not be measured just now (the app log says why)."""
 
     configured: bool
     free: int | None = None
@@ -405,8 +406,8 @@ def register_capacity_routes(
         _require_superuser()
         free: int | None = None
         total: int | None = None
-        if archive_space is not None:
-            free, total = await archive_space.measure()
+        if archive_space is not None and (measured := await archive_space.measure()):
+            free, total = measured
         return ArchiveSpaceOut(
             configured=archive_space is not None,
             free=free,

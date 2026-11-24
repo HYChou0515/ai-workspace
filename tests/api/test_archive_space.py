@@ -47,7 +47,9 @@ class _Runner:
 
 
 async def test_it_measures_the_real_filesystem(tmp_path: Path):
-    free, total = await ArchiveSpace(tmp_path).measure()
+    measured = await ArchiveSpace(tmp_path).measure()
+    assert measured is not None
+    free, total = measured
     assert total == shutil.disk_usage(tmp_path).total
     assert 0 < free <= total
 
@@ -193,3 +195,64 @@ def test_the_settings_reach_create_app(
         assert space.root == root
     assert seen["archive_block_free_ratio"] == expect_block
     assert seen["archive_warn_free_ratio"] == expect_warn
+
+
+# Review round 1 (D-2): a mount that errors or hangs is not "the archive is low".
+# It must not turn every send into a 500, nor pile a blocked thread onto every
+# send: the measurement says "unknown", the gate lets the turn through and says
+# so in the log, and only one measurement is ever outstanding.
+
+
+class _BrokenDisk:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc, self.calls = exc, 0
+
+    def __call__(self, _path: Any) -> Any:
+        self.calls += 1
+        raise self.exc
+
+
+def test_a_mount_that_errors_does_not_fail_every_send(tmp_path: Path, caplog):
+    runner = _Runner()
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        archive_space=ArchiveSpace(
+            tmp_path, usage=_BrokenDisk(OSError(116, "Stale file handle")), max_age_s=0
+        ),
+    )
+    with TestClient(app) as client:
+        assert _send(client, iid) == 202
+    assert "could not measure" in caplog.text
+    assert "Stale file handle" in caplog.text
+
+
+async def test_a_measurement_that_errors_is_unknown(tmp_path: Path):
+    space = ArchiveSpace(tmp_path, usage=_BrokenDisk(FileNotFoundError("/nope")), max_age_s=0)
+    assert await space.measure() is None
+
+
+async def test_a_hung_mount_is_unknown_and_holds_one_thread_not_one_per_send(tmp_path: Path):
+    import asyncio
+    import threading
+
+    release = threading.Event()
+    calls: list[int] = []
+
+    def hangs(_path: Any) -> Any:
+        calls.append(1)
+        release.wait(5)
+        return shutil._ntuple_diskusage(1000, 0, 1000)  # type: ignore[attr-defined]
+
+    space = ArchiveSpace(tmp_path, usage=hangs, max_age_s=0, timeout_s=0.1)
+    try:
+        results = await asyncio.gather(*(space.measure() for _ in range(5)))
+        assert results == [None] * 5
+        assert await space.measure() is None  # still hung: no second thread
+        assert len(calls) == 1
+    finally:
+        release.set()

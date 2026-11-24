@@ -142,7 +142,14 @@ class ArchiveSpace:
     mount the same claim (`sandbox.durable.nfs_root`), so the answer is one
     `disk_usage` call here — no host↔app protocol to drift. Cached for
     `max_age_s`: a burst of sends must not each make a round trip to the NFS
-    server, and a figure a few seconds old decides a 10% floor just as well."""
+    server, and a figure a few seconds old decides a 10% floor just as well.
+
+    A mount that errors (a stale handle, a missing path) or hangs is not "the
+    archive is low": the answer is None, said in the log, and nothing is refused
+    on it — otherwise one bad mount turns every send on every item into a 500.
+    At most ONE measurement is outstanding: a hung NFS `statvfs` cannot be
+    cancelled, and a fresh thread per send would drain the executor every
+    blocking call on this pod shares."""
 
     def __init__(
         self,
@@ -151,20 +158,35 @@ class ArchiveSpace:
         usage: Callable[[Path], Any] = shutil.disk_usage,
         clock: Callable[[], float] = time.monotonic,
         max_age_s: float = 30.0,
+        timeout_s: float = 5.0,
     ) -> None:
         self.root = Path(root)
         self._usage = usage
         self._clock = clock
         self._max_age_s = max_age_s
+        self._timeout_s = timeout_s
         self._last: tuple[float, int, int] | None = None
+        self._inflight: asyncio.Future[Any] | None = None
 
-    async def measure(self) -> tuple[int, int]:
-        """`(free, total)` in bytes — what an unprivileged writer can still use."""
+    async def measure(self) -> tuple[int, int] | None:
+        """`(free, total)` in bytes — what an unprivileged writer can still use —
+        or None when it could not be measured just now."""
         now = self._clock()
         if self._last is not None and now - self._last[0] < self._max_age_s:
             return self._last[1], self._last[2]
-        du = await asyncio.to_thread(self._usage, self.root)
-        self._last = (now, int(du.free), int(du.total))
+        if self._inflight is None or self._inflight.done():
+            self._inflight = asyncio.ensure_future(asyncio.to_thread(self._usage, self.root))
+        try:
+            du = await asyncio.wait_for(asyncio.shield(self._inflight), self._timeout_s)
+        except TimeoutError:
+            logger.warning(
+                "archive: could not measure %s: no answer within %gs", self.root, self._timeout_s
+            )
+            return None
+        except OSError as exc:
+            logger.warning("archive: could not measure %s: %s", self.root, exc)
+            return None
+        self._last = (self._clock(), int(du.free), int(du.total))
         return int(du.free), int(du.total)
 
 
@@ -218,7 +240,10 @@ class ArchiveGate:
                 raise ArchiveRefusing(item_id, reason)
         if self.space is None or self.block_free_ratio <= 0:
             return
-        free, total = await self.space.measure()
+        measured = await self.space.measure()
+        if measured is None:
+            return  # unknown is not low; `measure` said why in the log
+        free, total = measured
         if total and free < total * self.block_free_ratio:
             raise ArchiveSpaceLow(free, total, self.block_free_ratio)
 
@@ -284,7 +309,10 @@ class ArchiveSpaceWatch:
         """Measure once and tell what is owed. Returns how many rows it wrote."""
         if not self._levels:
             return 0
-        free, total = await self._space.measure()
+        measured = await self._space.measure()
+        if measured is None:
+            return 0  # unknown: neither a new stretch nor the end of one
+        free, total = measured
         if not total:
             return 0
         return await asyncio.to_thread(self._tick_sync, free, total)
