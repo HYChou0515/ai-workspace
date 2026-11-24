@@ -918,6 +918,15 @@ def create_app(
     )
     if archive_space is None:
         logger.info("archive: no sandbox archive configured — its space is not watched")
+    elif 0 < archive_warn_free_ratio <= archive_block_free_ratio:
+        # Review round 1: turns would stop before any superuser is told, which
+        # reads as "the warning never fired".
+        logger.warning(
+            "archive: sandbox.durable.block_free_ratio (%g) is at or above "
+            "sandbox.durable.warn_free_ratio (%g) — turns stop before anyone is told",
+            archive_block_free_ratio,
+            archive_warn_free_ratio,
+        )
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE

@@ -166,3 +166,29 @@ async def test_a_recovery_shorter_than_half_an_hour_is_the_same_stretch(tmp_path
     now[0] = 30 * _MIN
     await watch.tick()
     assert len(_rows(spec)) == 2  # not told again
+
+
+def test_a_window_another_pod_has_claimed_is_not_watched_again(tmp_path: Path):
+    """Review round 1: one pod per window measures and tells (`ScanLease`
+    "archive-space") — N pods each measuring and racing to tell is what the
+    lease exists to stop. Another pod already holds this window, so this one
+    stays quiet."""
+    from workspace_app.api.lifecycle import ARCHIVE_WATCH_INTERVAL_S
+    from workspace_app.workflow.triggers import ScanLease, SpecstarTriggerStore
+
+    spec = make_spec(default_user="u", superusers=frozenset({"ops-a"}))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        superusers=frozenset({"ops-a"}),
+        archive_space=ArchiveSpace(tmp_path, usage=_Disk(140), max_age_s=0),
+    )
+    lease = ScanLease(
+        SpecstarTriggerStore(spec), "archive-space", interval_s=ARCHIVE_WATCH_INTERVAL_S
+    )
+    assert lease.claim()  # pod A holds this window
+    with TestClient(app):
+        time.sleep(2)
+    assert _rows(spec) == []

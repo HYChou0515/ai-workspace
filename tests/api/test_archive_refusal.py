@@ -126,10 +126,10 @@ def test_a_record_left_by_another_pod_with_nothing_live_does_not_stop_the_item()
 
     asyncio.run(SpecstarArchiveFailures(spec).record(iid, _ENOSPC))  # pod A, gone
     with TestClient(app) as client:
-        assert (
-            client.post(f"/a/rca/items/{iid}/messages", json={"content": "go"}).status_code == 202
-        )
-    assert asyncio.run(SpecstarArchiveFailures(spec).reason_of(iid)) is None
+        resp = client.post(f"/a/rca/items/{iid}/messages", json={"content": "go"})
+        assert resp.status_code == 202
+        # Read inside the client: the shutdown write-back must not be what clears it.
+        assert asyncio.run(SpecstarArchiveFailures(spec).reason_of(iid)) is None
 
 
 def test_once_the_archive_takes_write_backs_again_the_next_send_goes_through():

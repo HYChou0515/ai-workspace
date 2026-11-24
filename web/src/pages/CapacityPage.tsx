@@ -143,19 +143,27 @@ export function CapacityPage({ client = capacityApi }: { client?: CapacityClient
  *  D4). Above the tabs, so no tab hides it. The shared `Gauge` (the one
  *  `/my-resources` draws), not a second bar. */
 function ArchiveLine({ space, t }: { space: ArchiveSpace; t: ReturnType<typeof useT> }) {
-  const total = space.total ?? 0;
-  const free = space.free ?? 0;
-  const pct = total ? ((100 * free) / total).toFixed(1) : "0.0";
+  if (space.total == null || space.free == null || !space.total) {
+    // Configured, but the mount did not answer just now (the app log says why).
+    return (
+      <div className="capacity-archive" data-testid="capacity-archive">
+        <p className="capacity-sub">{t("capacity.archive.unmeasured")}</p>
+      </div>
+    );
+  }
+  const { total, free } = space;
+  // A floor of 0 is switched off: no sentence about a rule that does not exist.
+  const detail = [
+    t("capacity.archive.free", { pct: ((100 * free) / total).toFixed(1) }),
+    space.warn_free_ratio > 0 &&
+      t("capacity.archive.warn", { warn: Math.round(space.warn_free_ratio * 100) }),
+    space.block_free_ratio > 0 &&
+      t("capacity.archive.block", { block: Math.round(space.block_free_ratio * 100) }),
+  ].filter(Boolean);
   return (
     <div className="capacity-archive" data-testid="capacity-archive">
       <Gauge label={t("capacity.archive.label")} used={total - free} limit={total} format={formatBytes} />
-      <p className="capacity-sub">
-        {t("capacity.archive.detail", {
-          pct,
-          warn: Math.round(space.warn_free_ratio * 100),
-          block: Math.round(space.block_free_ratio * 100),
-        })}
-      </p>
+      <p className="capacity-sub">{detail.join(" ")}</p>
     </div>
   );
 }

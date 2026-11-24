@@ -171,6 +171,44 @@ describe("CapacityPage — the sandbox archive (docs/plan-archive-full.md D6)", 
     expect(within(line).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "85");
   });
 
+  it("does not speak of a floor that is switched off", async () => {
+    // Review round 1: `0` switches a floor off; "below 0%" would be a rule that
+    // does not exist.
+    const c = client({
+      archive: vi.fn(async () => ({
+        configured: true,
+        free: 3 * GiB,
+        total: 20 * GiB,
+        warn_free_ratio: 0,
+        block_free_ratio: 0.1,
+      })),
+    });
+    renderPage(c);
+
+    const line = await screen.findByTestId("capacity-archive");
+    expect(line).toHaveTextContent("15.0%");
+    expect(line).toHaveTextContent("10%");
+    expect(line).not.toHaveTextContent(/通知管理員|administrators are told/);
+    expect(line).not.toHaveTextContent(/ 0%/);
+  });
+
+  it("says it could not measure when the numbers are absent", async () => {
+    const c = client({
+      archive: vi.fn(async () => ({
+        configured: true,
+        free: null,
+        total: null,
+        warn_free_ratio: 0.2,
+        block_free_ratio: 0.1,
+      })),
+    });
+    renderPage(c);
+
+    const line = await screen.findByTestId("capacity-archive");
+    expect(line).toHaveTextContent(/目前量不到|could not be measured/);
+    expect(within(line).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
   it("shows nothing for a deploy with no archive", async () => {
     const c = client();
     renderPage(c);

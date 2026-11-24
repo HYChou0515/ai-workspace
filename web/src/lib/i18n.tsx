@@ -3623,9 +3623,18 @@ export const messages = {
   "capacity.title": { "zh-TW": "容量規劃", en: "Capacity" },
   // docs/plan-archive-full.md D6: the sandbox archive line above the tabs.
   "capacity.archive.label": { "zh-TW": "沙盒存檔空間", en: "Sandbox archive" },
-  "capacity.archive.detail": {
-    "zh-TW": "剩 {pct}%。低於 {warn}% 時通知管理員，低於 {block}% 時所有 item 都不接受新的對話。",
-    en: "{pct}% free. Below {warn}% the administrators are told; below {block}% no item takes a new conversation.",
+  "capacity.archive.free": { "zh-TW": "剩 {pct}%。", en: "{pct}% free." },
+  "capacity.archive.warn": {
+    "zh-TW": "低於 {warn}% 時通知管理員。",
+    en: "Below {warn}% the administrators are told.",
+  },
+  "capacity.archive.block": {
+    "zh-TW": "低於 {block}% 時所有 item 都不接受新的對話。",
+    en: "Below {block}% no item takes a new conversation.",
+  },
+  "capacity.archive.unmeasured": {
+    "zh-TW": "沙盒存檔空間：目前量不到（原因在 app 的 log）。",
+    en: "Sandbox archive: it could not be measured just now (the app log says why).",
   },
   "capacity.subtitle": {
     "zh-TW": "我們吃掉多少資源，人更多時需要多少、要買幾台機器和幾張 GPU、什麼時候要下單。",

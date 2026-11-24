@@ -256,3 +256,30 @@ async def test_a_hung_mount_is_unknown_and_holds_one_thread_not_one_per_send(tmp
         assert len(calls) == 1
     finally:
         release.set()
+
+
+def test_a_refusal_floor_at_or_above_the_warning_floor_is_called_out_at_boot(
+    tmp_path: Path, caplog
+):
+    """Review round 1: with block >= warn, turns stop before any superuser is
+    told — a configuration that would read as 'the warning never fired'."""
+    _app(
+        _Disk(free=900),
+        tmp_path,
+        _Runner(),
+        archive_block_free_ratio=0.3,
+        archive_warn_free_ratio=0.2,
+    )
+    assert "block_free_ratio" in caplog.text
+    assert "warn_free_ratio" in caplog.text
+
+
+def test_floors_in_the_usual_order_say_nothing_at_boot(tmp_path: Path, caplog):
+    _app(
+        _Disk(free=900),
+        tmp_path,
+        _Runner(),
+        archive_block_free_ratio=0.1,
+        archive_warn_free_ratio=0.2,
+    )
+    assert "block_free_ratio" not in caplog.text
