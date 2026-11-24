@@ -3889,7 +3889,10 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
   那個 item 就不能開始新的對話（聊天、workflow 步驟、「請幫我查」卡片都是），回 507 `archive_write_failed`，畫面附 archive 的
   錯誤原文（例如 `No space left on device`）。開始新對話前會先再試寫回一次（每個候選沙盒最多等 20 秒，最多兩個），成功就放行；那個 item 已經沒有
   活著的沙盒也放行。**為什麼**：寫不進 archive 的修改只存在 host pod 的磁碟上，下一次重啟就消失。
-- 量不到剩餘空間（mount 出錯或 5 秒沒回應）時不擋，log 印 `archive: could not measure …`。
+- 量不到剩餘空間（mount 出錯或 5 秒沒回應）時不擋，log 印 `archive: could not measure …`；量不到的結果記 30 秒，這段時間不再重量。
+- rsync 回 exit 24（複製途中有檔案消失，例如 `pip install` 的暫存檔）在 checkpoint 和 turn 結束時算寫回成功；在回收（reap）前的最後一次寫回
+  不算，沙盒留著、下一輪回收再試。host 寫回失敗的 log 是 ERROR（升級前是 uvicorn 印的 ERROR，維持一樣）。
+- 讀不到「寫回被拒」紀錄（store 出錯）時當作沒有紀錄放行，log 印 `could not read the archive record`。
 - 容量頁（`/capacity`）標題下多一行「沙盒存檔空間：已用 / 總量」。
 - 共用的用量條（`/my-resources`、item 的 Sandbox 視窗、這一行）的無障礙角色從 `progressbar` 改成 `meter`；畫面不變。
 

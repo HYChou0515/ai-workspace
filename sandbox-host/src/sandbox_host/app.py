@@ -525,7 +525,7 @@ class _HostController:
         if not await self.sandbox.is_ready(handle):
             return
         reconciled = await self._archive.persist(
-            item, self.sandbox.workspace_dir(handle), delete=delete
+            item, self.sandbox.workspace_dir(handle), delete=delete, settled=pack
         )
         if pack and reconciled and self._archive.packing:
             self.pack_on_kill.add(rid)

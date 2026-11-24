@@ -180,3 +180,29 @@ async def test_a_refused_archive_is_logged_as_an_error(tmp_path: Path, caplog):
             await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
     refused = [r for r in caplog.records if "archive operation failed" in r.getMessage()]
     assert refused and all(r.levelno == logging.ERROR for r in refused)
+
+
+async def test_files_vanishing_during_a_reaps_write_back_keep_the_sandbox(tmp_path: Path):
+    """Review round 3: a reap's write-back is the last before the sandbox is
+    destroyed. Files vanishing then mean something was still writing — a file
+    renamed past rsync's scan was never copied, and `--delete` already removed
+    the archive's old copy. A checkpoint or turn end can count that as landed
+    (the next reconcile repairs it); the reap cannot: it must fail, so the
+    sandbox is kept and the reap retries."""
+
+    async def vanished(argv: list[str]) -> tuple[int, bytes]:
+        if argv[0] != "rsync":
+            return 0, b""
+        return (
+            24,
+            b"rsync warning: some files vanished before they could be transferred (code 24)\n",
+        )
+
+    archive = NfsArchive(tmp_path / "nfs", runner=vanished)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+    app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-1"})).json()["remote_id"]
+        reap = await c.post(f"/sandboxes/{rid}/persist", json={"delete": True, "pack": True})
+    assert reap.status_code == 500
+    assert reap.json()["error"] == "ArchiveWriteFailed"

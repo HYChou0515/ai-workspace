@@ -786,9 +786,19 @@ class InvestigationRegistry:
         # rebuilt the sandbox there (review round 1, D-3) — "my handle is gone"
         # is not "nothing is live".
         candidates: list[SandboxHandle] = []
-        if self.address is not None and (published := await self.address.get(investigation_id)):
-            candidates.append(published)
-        mine = await self.resolve_io_handle(investigation_id)
+        try:
+            if self.address is not None and (published := await self.address.get(investigation_id)):
+                candidates.append(published)
+            mine = await self.resolve_io_handle(investigation_id)
+        except Exception:  # noqa: BLE001 - unknown is not "saved": the record stays
+            # Review round 3: the address store is the same backend as the record;
+            # a hiccup here must not turn the send into a 500.
+            logger.warning(
+                "registry: could not find the sandbox of item %s to recheck its archive refusal",
+                investigation_id,
+                exc_info=True,
+            )
+            return
         if mine is not None and mine not in candidates:
             candidates.append(mine)
         for handle in candidates:

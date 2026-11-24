@@ -281,3 +281,25 @@ async def test_concurrent_rechecks_of_one_item_run_one_write_back():
 
     assert started == 1
     assert await store.reason_of("item-1") is None
+
+
+async def test_a_store_hiccup_while_finding_the_sandbox_keeps_the_record_and_answers():
+    """Review round 3: the recheck first asks the shared address store where the
+    item's sandbox is. A hiccup there escaped to the send as a 500; unknown is
+    not "saved" — the record stays and the gate answers with it."""
+    from workspace_app.api.archive_health import ArchiveGate, ArchiveRefusing
+
+    store = _store()
+    registry, _sandbox = await _registry(store)
+    await store.record("item-1", _ENOSPC)
+
+    class _Hiccup:
+        async def get(self, item_id: str):
+            raise RuntimeError("store hiccup")
+
+    registry.address = _Hiccup()  # ty: ignore[invalid-assignment]
+    gate = ArchiveGate(store, None, block_free_ratio=0, recheck=registry.recheck_archive)
+    with contextlib.suppress(ArchiveRefusing):
+        await gate.check("item-1")
+        raise AssertionError("the record must stand")
+    assert await store.reason_of("item-1") == _ENOSPC

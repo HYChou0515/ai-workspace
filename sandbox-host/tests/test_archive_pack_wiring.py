@@ -48,7 +48,7 @@ class _Archive:
     async def restore(self, item_id: str, workspace_dir: Path) -> bool:
         return False
 
-    async def persist(self, item_id, workspace_dir, *, delete) -> bool:
+    async def persist(self, item_id, workspace_dir, *, delete, settled=False) -> bool:
         self.persists.append(delete)
         if not delete and self.checkpoint_gate is not None:
             self.checkpoint_entered.set()

@@ -140,6 +140,7 @@ class NfsArchive:
         workspace_dir: Path,
         *,
         delete: bool,
+        settled: bool = False,
     ) -> bool:
         """rsync the sandbox's local working dir → the item's NFS archive. With
         ``delete`` the archive is reconciled to match exactly (turn-end / reap /
@@ -181,7 +182,12 @@ class NfsArchive:
         # test run). Everything that still exists was copied, and a vanished file
         # had nothing left to save: the write-back LANDED. Read as a refusal it
         # stopped the item's turns during ordinary work (review round 2).
-        await self._invoke(argv, ok=(0, _RSYNC_VANISHED))
+        # NOT on a ``settled`` write-back (a reap's, the last before the sandbox
+        # is destroyed): files vanishing then mean something was still writing,
+        # and a file renamed past rsync's scan was never copied while
+        # ``--delete`` removed the old one. Failing keeps the sandbox, and the
+        # reap retries (review round 3).
+        await self._invoke(argv, ok=(0,) if settled else (0, _RSYNC_VANISHED))
         return reconcile
 
     async def pack(self, item_id: str, workspace_dir: Path) -> bool:
