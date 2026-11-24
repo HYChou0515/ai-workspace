@@ -291,7 +291,9 @@ class WorkflowExecutor:
         # scheduled headless run is refused too, rather than exempted: an
         # exemption would be a way to spend resources the limit says you do not
         # have, just by scheduling it. #9 in the plan makes the refusal visible.
-        await admit_turn(self._files, self._admission, item_id)
+        await admit_turn(
+            self._files, self._admission, item_id, archive=self._registry.archive_failures
+        )
         # Where the turn persists; the node reads none of it (below).
         try:
             rid = chat_key

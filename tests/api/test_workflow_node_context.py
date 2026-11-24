@@ -283,3 +283,34 @@ async def test_a_full_workspace_does_not_fail_a_step_over_its_transcript(
         await ex._files.read(stack["item_id"], "/.workflow/w/step_classify/main.transcript.md")
     ).decode()
     assert "classify" in text
+
+
+async def test_a_step_is_refused_while_the_archive_refuses_the_item(
+    stack: dict[str, Any],
+) -> None:
+    """docs/plan-archive-full.md D1: a workflow step passes the same turn gate a
+    chat send does. While the archive refuses this item's write-backs a step
+    would only add work a rollout erases, so it is refused — with the reason —
+    and never reaches the model."""
+    from workspace_app.api.archive_health import ArchiveRefusing
+    from workspace_app.resources import Conversation
+    from workspace_app.workflow.steps import StepRef
+
+    ex = stack["ex"]
+    rid = stack["conv_rm"].create(Conversation(item_id=stack["item_id"])).resource_id
+    await ex._registry.archive_failures.record(stack["item_id"], "No space left on device (28)")
+
+    with pytest.raises(ArchiveRefusing) as caught:
+        await ex.drive_turn(
+            stack["item_id"],
+            rid,
+            "u",
+            "classify",
+            None,
+            run_id="run-1",
+            step=StepRef("classify", "", "sort"),
+            journal_dir="/.workflow/w",
+        )
+
+    assert caught.value.reason == "No space left on device (28)"
+    assert stack["runner"].prompts == []

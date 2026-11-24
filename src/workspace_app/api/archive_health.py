@@ -33,6 +33,20 @@ from specstar.types import (
 logger = logging.getLogger(__name__)
 
 
+class ArchiveRefusing(Exception):
+    """A turn refused because the archive is refusing this item's write-backs
+    (D1): its newest work exists only on the sandbox host pod's own disk, and a
+    new turn would add more that a rollout erases. `reason` is the archive's own
+    words (rsync's), shown as they are (D2)."""
+
+    code = "archive_write_failed"
+
+    def __init__(self, item_id: str, reason: str) -> None:
+        self.item_id = item_id
+        self.reason = reason
+        super().__init__(f"saving to the archive is failing for this item: {reason}")
+
+
 class IArchiveFailures(abc.ABC):
     """Per-item "the last write-back was refused, and this is why"."""
 

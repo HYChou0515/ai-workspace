@@ -108,7 +108,7 @@ from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import make_relay
-from .archive_health import SpecstarArchiveFailures, register_archive_health
+from .archive_health import ArchiveRefusing, SpecstarArchiveFailures, register_archive_health
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -1713,6 +1713,17 @@ def create_app(
             content={"detail": quota_body(exc, viewer=get_user_id(), titles_of=_titles_of)},
         )
 
+    @app.exception_handler(ArchiveRefusing)
+    async def _archive_refusing(_request: Request, exc: ArchiveRefusing) -> JSONResponse:
+        """docs/plan-archive-full.md D1/D2: a turn refused because the archive is
+        refusing this item's write-backs. 507 like the other "nothing more can be
+        held" refusals, with its own code — the remedy is not the person's to
+        take, so the FE says so — and the archive's reason as it is."""
+        return JSONResponse(
+            status_code=507,
+            content={"detail": {"error": exc.code, "reason": exc.reason}},
+        )
+
     @app.exception_handler(TurnRefused)
     async def _turn_refused(_request: Request, exc: TurnRefused) -> JSONResponse:
         """More than one limit is at its cap. Same shape as one refusal plus an
@@ -2769,6 +2780,7 @@ def create_app(
 
     chat_send_svc = ChatSendService(
         admission=admission,
+        archive_failures=archive_failures,
         spec=spec,
         locator=locator,
         # #615: the after-hours budget + window the turn-end driver reads to
