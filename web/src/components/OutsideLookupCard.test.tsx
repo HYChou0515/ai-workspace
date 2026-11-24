@@ -346,6 +346,29 @@ describe("bringing it back", () => {
     expect(screen.getByRole("button", { name: "送出" })).toBeInTheDocument();
     expect(screen.getByLabelText("查到的內容")).toHaveValue("found");
   });
+
+  it("says saving is failing — not that the workspace is full — when the archive refuses", async () => {
+    // docs/plan-archive-full.md review round 1 (D-5): answering the card is a
+    // turn, so it meets the archive gate; read as a quota it sent people off to
+    // delete files that are not the problem.
+    draw({
+      answer: async () => {
+        throw new HttpError(507, "x", "archive_space_low", undefined, {
+          error: "archive_space_low",
+          free: 1024 ** 3,
+          total: 20 * 1024 ** 3,
+          block_free_ratio: 0.1,
+        });
+      },
+    });
+    fireEvent.change(screen.getByLabelText("查到的內容"), { target: { value: "found" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("沙盒存檔空間只剩");
+    expect(alert).not.toHaveTextContent("空間已滿");
+  });
 });
 
 describe("review round 1", () => {

@@ -310,6 +310,25 @@ export const capacityApi = {
     const r = await apiFetch(`/admin/capacity/refresh?days=${days}`, { method: "POST" });
     if (!r.ok) throw await failed(r, "capacity refresh");
   },
+
+  /** docs/plan-archive-full.md D6: the sandbox archive's use. Its own request, not
+   *  part of the summary — that analysis can be slow or refuse, and this line has
+   *  to be there the day the archive is full. */
+  async archive(): Promise<ArchiveSpace> {
+    const r = await apiFetch("/admin/capacity/archive");
+    if (!r.ok) throw await failed(r, "capacity archive");
+    return (await r.json()) as ArchiveSpace;
+  },
+};
+
+/** `api/capacity_routes.ArchiveSpaceOut`. `configured` false ⇒ no archive on this
+ *  deploy, and the numbers are null rather than zero. */
+export type ArchiveSpace = {
+  configured: boolean;
+  free: number | null;
+  total: number | null;
+  warn_free_ratio: number;
+  block_free_ratio: number;
 };
 
 export type CapacityClient = typeof capacityApi;

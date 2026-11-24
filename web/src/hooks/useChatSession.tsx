@@ -15,7 +15,7 @@ import { publishFileChanged } from "../lib/fileChangedBus";
 import { refreshBudgetAfterTurn } from "../lib/llmBudget";
 import { publishTurnEnded } from "../lib/turnEndedBus";
 import type { MsgKey } from "../lib/i18n";
-import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
+import { archiveRefusal, type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { invalidateTree } from "./invalidateTree";
 import { holdingFromSendError } from "./useChatSessionHolding";
 import { type ChatThread, useChatLog } from "./useChatLog";
@@ -678,8 +678,17 @@ export function useChatSession(
           ...(err as { code?: string; also?: string[]; detail?: QuotaDetail } | null),
           status,
         });
+        // docs/plan-archive-full.md D2/D3: saving is failing. Asked FIRST — it
+        // also answers 507, and read as a quota it would send the person off to
+        // delete files that are not the problem.
+        const archive = archiveRefusal(t, {
+          ...(err as { code?: string; detail?: QuotaDetail } | null),
+          status,
+        });
         const failure =
-          quota !== null
+          archive !== null
+            ? { kind: archive.kind, raw: archive.reason, headline: archive.headline }
+            : quota !== null
             ? failureFromError(err, "quota", quota)
             : // #714: the send was refused because the backend could not establish
               // who is asking. "messages failed: 500" is visible and useless; the

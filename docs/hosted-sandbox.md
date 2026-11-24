@@ -299,6 +299,7 @@ exec(handle, ["sh", "-lc", f"export WF_TOKEN={token}; {run}"])
 | 讀取逾時 | `SandboxBusy` | pod 活著但**慢**(過載 / 大檔傳輸中) | 冪等操作用**遞增期限**重試;**絕不** rebuild |
 | 連線被拒/重設 | `SandboxNotFound` | pod **沒了** | 從 durable 重建 |
 | 404 + `{"error":…}` | 同上 | host 活著但沒這個 sandbox(已回收) | 同上 |
+| `persist` 回任何 5xx | `ArchiveWriteFailed` | 這次寫回沒有發生:archive 不收(磁碟滿、NFS 出錯)時 host 回 `{"error": "ArchiveWriteFailed", "detail": <錯誤原文>}`;host 自己出錯、舊 host,原因寫 `the sandbox host gave no reason (HTTP n)` | 記成這個 item「寫回被拒」,它不能開始新對話,畫面附原因;開始新對話前會先再試寫回一次,成功(或那個 item 已經沒有活著的沙盒)就解除;記下它的那個 pod 之後寫回成功也會清掉([plan-archive-full](plan-archive-full.md)) |
 
 重試策略只套在**冪等的檔案/探測操作**上:第 n 次嘗試的讀取期限是
 `min(base × factor^(n-1), cap)`,退避同構(預設 4 次、10s 起跳、上限 40s)。一個真的卡死的
@@ -329,6 +330,8 @@ sandbox:
   durable:
     kind: nfs_tree                       # 與 host_managed_durable 配對使用
     nfs_root: /mnt/workspaces            # 必須與 host 的 SANDBOX_HOST_NFS_ROOT 指向同一棵樹
+    warn_free_ratio: 0.2                 # archive 剩餘低於容量 20% 起通知 superuser（0 = 關）
+    block_free_ratio: 0.1                # 低於 10% 時所有 item 都不接受新對話（0 = 關）
 ```
 
 **host 端**(`SANDBOX_HOST_*` 環境變數,**不讀 app 的 config 檔**)——完整表在

@@ -311,6 +311,12 @@ class SandboxDurableSettings:
     kind: str = ""  # "" (follow filestore.kind) | nfs_tree
     nfs_root: str = ""
     migrate_from: str = ""  # "" | specstar
+    # docs/plan-archive-full.md D7: the archive's floors, as a fraction of its
+    # capacity, read off `nfs_root` (so only with `kind: nfs_tree`). Below
+    # `warn_free_ratio` every superuser is told; below `block_free_ratio` no item
+    # takes a new turn. 0 switches that one off.
+    warn_free_ratio: float = 0.2
+    block_free_ratio: float = 0.1
 
 
 @dataclass(frozen=True)

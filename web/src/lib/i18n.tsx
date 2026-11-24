@@ -1209,6 +1209,18 @@ export const messages = {
     "zh-TW": "沒有送出:這個 workspace 的空間已滿。請先刪除不需要的檔案。",
     en: "Not sent — this workspace is full. Delete files you no longer need first.",
   },
+  // docs/plan-archive-full.md D2: the archive is refusing this item's write-backs.
+  // Not the person's to fix, so the remedy is an administrator; the reason is the
+  // archive's own words (rsync's), never reworded.
+  "chat.send.archiveFailing": {
+    "zh-TW": "沒有送出:目前無法存檔，新的修改會在沙盒重啟時遺失，請聯絡管理員。原因:{reason}",
+    en: "Not sent — saving is failing right now, and new changes would be lost when the sandbox restarts. Please contact an administrator. Reason: {reason}",
+  },
+  // D3: the sandbox archive is below its floor, so NO item takes a new turn.
+  "chat.send.archiveLow": {
+    "zh-TW": "沒有送出:沙盒存檔空間只剩 {free}（{pct}%），低於 {floor}%，在擴充之前不接受新的對話，請聯絡管理員。",
+    en: "Not sent — the sandbox archive has only {free} left ({pct}%), below its {floor}% floor; no new conversations are taken until it is extended. Please contact an administrator.",
+  },
   // #714: the deploy's request→env source refused or broke. The turn was not
   // started BECAUSE the tools would have run without knowing who is asking, so
   // the copy has to say "nothing happened", not "something went wrong".
@@ -3609,6 +3621,21 @@ export const messages = {
   },
   // docs/plan-capacity-usage.md — the capacity dashboard (superusers only).
   "capacity.title": { "zh-TW": "容量規劃", en: "Capacity" },
+  // docs/plan-archive-full.md D6: the sandbox archive line above the tabs.
+  "capacity.archive.label": { "zh-TW": "沙盒存檔空間", en: "Sandbox archive" },
+  "capacity.archive.free": { "zh-TW": "剩 {pct}%。", en: "{pct}% free." },
+  "capacity.archive.warn": {
+    "zh-TW": "低於 {warn}% 時通知管理員。",
+    en: "Below {warn}% the administrators are told.",
+  },
+  "capacity.archive.block": {
+    "zh-TW": "低於 {block}% 時所有 item 都不接受新的對話。",
+    en: "Below {block}% no item takes a new conversation.",
+  },
+  "capacity.archive.unmeasured": {
+    "zh-TW": "沙盒存檔空間：目前量不到（原因在 app 的 log）。",
+    en: "Sandbox archive: it could not be measured just now (the app log says why).",
+  },
   "capacity.subtitle": {
     "zh-TW": "我們吃掉多少資源，人更多時需要多少、要買幾台機器和幾張 GPU、什麼時候要下單。",
     en: "What we use, and what more people would need: how many machines and GPUs, and when to order.",

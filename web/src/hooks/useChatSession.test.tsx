@@ -742,3 +742,59 @@ describe("following a turn started elsewhere", () => {
     expect(getThread.mock.calls.length).toBe(reads);
   });
 });
+
+describe("a send refused because saving is failing", () => {
+  // docs/plan-archive-full.md D1–D3: the person is told plainly, with the
+  // archive's own reason or numbers — not a quota sentence, not a bare status.
+  const reason =
+    'rsync: [receiver] write failed on "/a/f": No space left on device (28)\n' +
+    "rsync error: error in file IO (code 11) at receiver.c(657) [receiver=3.5.0]";
+
+  const refused = (code: string, detail: Record<string, unknown>) =>
+    Object.assign(new Error("Insufficient Storage"), {
+      status: 507,
+      code,
+      detail: { error: code, ...detail },
+    });
+
+  it("says saving is failing, that new work will be lost, and why", async () => {
+    const err = refused("archive_write_failed", { reason });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("keep going");
+    });
+
+    const failure = result.current.log.error;
+    expect(failure?.kind).toBe("archive_write_failed");
+    expect(failure?.headline).toMatch(/無法存檔|Saving is failing/);
+    expect(failure?.headline).toContain("No space left on device (28)");
+    expect(failure?.headline).not.toMatch(/空間已滿|workspace is full/i);
+  });
+
+  it("says the archive is nearly full, with how much is left, when below its floor", async () => {
+    // D3: every item is refused before the archive is full; the numbers are the
+    // reason. 1 GiB of 20 GiB is 5%, under a 10% floor.
+    const err = refused("archive_space_low", {
+      free: 1024 ** 3,
+      total: 20 * 1024 ** 3,
+      block_free_ratio: 0.1,
+    });
+    const t = fakeTransport({ post: vi.fn(() => Promise.reject(err)) });
+    const { result } = render(t);
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.send("keep going");
+    });
+
+    const failure = result.current.log.error;
+    expect(failure?.kind).toBe("archive_space_low");
+    expect(failure?.headline).toContain("1.0 GB");
+    expect(failure?.headline).toContain("5.0%");
+    expect(failure?.headline).toContain("10%");
+    expect(failure?.headline).not.toMatch(/空間已滿|workspace is full/i);
+  });
+});

@@ -87,6 +87,10 @@ export const QUOTA_ALSO_KEY = {
 
 export function quotaKind(status: number | undefined, code: string | undefined): QuotaKind {
   if (status !== 507) return null;
+  // docs/plan-archive-full.md: the archive's refusals answer 507 too, and are no
+  // limit the person can free — read as one they sent people off to delete files
+  // that are not the problem. `archiveRefusal` words them.
+  if (code === "archive_write_failed" || code === "archive_space_low") return null;
   if (code === "user_quota_exceeded") return "user";
   if (code === "sandbox_quota_exceeded") return "environment";
   // No code, or the pre-existing one: an older backend, or a body that was not
@@ -116,6 +120,49 @@ export function quotaKinds(
   return [primary, ...(also ?? []).map((c) => quotaKind(status, c)).filter((k) => k !== null)];
 }
 
+
+/**
+ * A turn refused because saving is failing (docs/plan-archive-full.md D1–D3), as
+ * the sentence to show — or null for any other refusal.
+ *
+ * Not one of the `QuotaKind`s on purpose: those are limits the person can free
+ * (delete here, delete elsewhere, close one), and every surface words each of
+ * them. These have no remedy of the person's own and only a turn can meet them,
+ * so they are worded once: this item's write-backs are refused (with the
+ * archive's reason as it came), or the whole archive is below its floor (with
+ * the numbers, which are the reason).
+ */
+export function archiveRefusal(
+  t: (key: MsgKey, vars?: Vars) => string,
+  err: {
+    status?: number;
+    code?: string;
+    detail?: QuotaDetail & {
+      reason?: unknown;
+      free?: unknown;
+      total?: unknown;
+      block_free_ratio?: unknown;
+    };
+  } | null,
+): { kind: string; headline: string; reason: string } | null {
+  if (err?.status !== 507) return null;
+  const code = err.code ?? err.detail?.error;
+  if (code === "archive_write_failed") {
+    const reason = typeof err.detail?.reason === "string" ? err.detail.reason : "";
+    return { kind: code, headline: t("chat.send.archiveFailing", { reason }), reason };
+  }
+  if (code === "archive_space_low") {
+    const { free, total, block_free_ratio: floor } = err.detail ?? {};
+    if (typeof free !== "number" || typeof total !== "number" || !total) return null;
+    const headline = t("chat.send.archiveLow", {
+      free: formatBytes(free),
+      pct: ((100 * free) / total).toFixed(1),
+      floor: typeof floor === "number" ? Math.round(floor * 100) : "",
+    });
+    return { kind: code, headline, reason: headline };
+  }
+  return null;
+}
 
 /**
  * The whole refusal sentence: the surface's own wording for the limit that led,

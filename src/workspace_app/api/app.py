@@ -108,6 +108,15 @@ from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import make_relay
+from .archive_health import (
+    ArchiveGate,
+    ArchiveRefusing,
+    ArchiveSpace,
+    ArchiveSpaceLow,
+    ArchiveSpaceWatch,
+    SpecstarArchiveFailures,
+    register_archive_health,
+)
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -569,6 +578,13 @@ def create_app(
     # (shared-vol local / non-http), unchanged. __main__ derives it from
     # settings.sandbox.kind == "http" and settings.sandbox.http.host_managed_durable.
     host_managed_durable: bool = False,
+    # docs/plan-archive-full.md D3/D4/D8: the archive's filesystem as this pod
+    # mounts it (`sandbox.durable.nfs_root`), and the two floors as a fraction of
+    # its capacity — below `block` no item takes a new turn, below `warn` the
+    # superusers are told. None ⇒ no archive here: nothing is measured or refused.
+    archive_space: ArchiveSpace | None = None,
+    archive_block_free_ratio: float = 0.1,
+    archive_warn_free_ratio: float = 0.2,
     # #493 symptom 1 (504): how long a message POST awaits its own turn before
     # detaching it to the engine's background worker and returning 202. Snappy
     # turns finish within this (unchanged behaviour); a long turn detaches well
@@ -887,6 +903,30 @@ def create_app(
     from ..sandbox.http_client import HttpSandbox
 
     activity_store: IActivityStore = SpecstarActivityStore(spec)
+    # docs/plan-archive-full.md P2: which items the archive is refusing — written
+    # by the registry's write-back, read by the turn gate (P3). Shared because the
+    # pod whose checkpoint failed is rarely the one the next message lands on.
+    archive_failures = SpecstarArchiveFailures(spec)
+    # …and the one gate both turn paths ask (P3/P4): this item's refusal, then
+    # the archive's floor. `archive_space` None ⇒ no archive here (D8).
+    archive_gate = ArchiveGate(
+        archive_failures,
+        archive_space,
+        block_free_ratio=archive_block_free_ratio,
+        # Late-bound: the registry is built below, and is there by the first turn.
+        recheck=lambda item_id: registry.recheck_archive(item_id),
+    )
+    if archive_space is None:
+        logger.info("archive: no sandbox archive configured — its space is not watched")
+    elif 0 < archive_warn_free_ratio <= archive_block_free_ratio:
+        # Review round 1: turns would stop before any superuser is told, which
+        # reads as "the warning never fired".
+        logger.warning(
+            "archive: sandbox.durable.block_free_ratio (%g) is at or above "
+            "sandbox.durable.warn_free_ratio (%g) — turns stop before anyone is told",
+            archive_block_free_ratio,
+            archive_warn_free_ratio,
+        )
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE
@@ -1321,6 +1361,7 @@ def create_app(
         sync=sync,
         activity=activity_store,
         address=address_store,
+        archive_failures=archive_failures,
         host_managed_durable=host_managed_durable,
         durable_backfill=resolve_durable_backfill(
             filestore, host_managed_durable=host_managed_durable
@@ -1583,6 +1624,17 @@ def create_app(
         gc_interval=gc_interval,
         disk_reconcile_interval=disk_reconcile_interval,
         telemetry_keep_days=telemetry_keep_days,
+        archive_watch=(
+            ArchiveSpaceWatch(
+                spec,
+                archive_space,
+                superusers=superusers,
+                warn_free_ratio=archive_warn_free_ratio,
+                block_free_ratio=archive_block_free_ratio,
+            )
+            if archive_space is not None and superusers
+            else None
+        ),
         shutdown_budget=shutdown_budget,
         turn_reclaim_interval=turn_reclaim_interval,
         trigger_check_interval=trigger_check_interval,
@@ -1705,6 +1757,33 @@ def create_app(
             # the owner's working set, and a collaborator who hit their ceiling
             # is owed the reason, not the inventory.
             content={"detail": quota_body(exc, viewer=get_user_id(), titles_of=_titles_of)},
+        )
+
+    @app.exception_handler(ArchiveRefusing)
+    async def _archive_refusing(_request: Request, exc: ArchiveRefusing) -> JSONResponse:
+        """docs/plan-archive-full.md D1/D2: a turn refused because the archive is
+        refusing this item's write-backs. 507 like the other "nothing more can be
+        held" refusals, with its own code — the remedy is not the person's to
+        take, so the FE says so — and the archive's reason as it is."""
+        return JSONResponse(
+            status_code=507,
+            content={"detail": {"error": exc.code, "reason": exc.reason}},
+        )
+
+    @app.exception_handler(ArchiveSpaceLow)
+    async def _archive_space_low(_request: Request, exc: ArchiveSpaceLow) -> JSONResponse:
+        """docs/plan-archive-full.md D3: every item stops taking new turns while
+        the archive is below its floor. The numbers are the reason."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": exc.code,
+                    "free": exc.free,
+                    "total": exc.total,
+                    "block_free_ratio": exc.block_free_ratio,
+                }
+            },
         )
 
     @app.exception_handler(TurnRefused)
@@ -1972,6 +2051,9 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    # docs/plan-archive-full.md P2: post-apply for the same reason — a
+    # coordination row with no CRUD routes, there before any write-back.
+    register_archive_health(spec)
     # Workflow runs: post-apply so the run table has no CRUD routes of its own —
     # it had them with no gate at all (#870). Before anything reads a run.
     register_workflow_run(spec)
@@ -2432,6 +2514,9 @@ def create_app(
         get_user_id=get_user_id,
         superusers=superusers,
         sandbox_measured=_sandbox_measured(sandbox),
+        archive_space=archive_space,
+        archive_warn_free_ratio=archive_warn_free_ratio,
+        archive_block_free_ratio=archive_block_free_ratio,
     )
 
     # The write side of `_item_facts`: whoever changes an item's stored facts
@@ -2619,6 +2704,7 @@ def create_app(
     # adapter. The orchestrator wiring + capability routes call its methods.
     workflow_executor = WorkflowExecutor(
         admission=admission,
+        archive_gate=archive_gate,
         spec=spec,
         files=files,
         registry=registry,
@@ -2760,6 +2846,7 @@ def create_app(
 
     chat_send_svc = ChatSendService(
         admission=admission,
+        archive_gate=archive_gate,
         spec=spec,
         locator=locator,
         # #615: the after-hours budget + window the turn-end driver reads to

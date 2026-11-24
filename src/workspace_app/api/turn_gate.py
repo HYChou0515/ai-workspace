@@ -29,6 +29,7 @@ from ..quota.disk_ledger import UserDiskFull
 if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime
     from ..files.facade import WorkspaceFiles
     from ..quota.admission import AdmissionGate
+    from .archive_health import ArchiveGate
 
 #: Every refusal that means "you are holding as much as you may hold". The code
 #: is the FE's switch (`web/src/lib/quotaFailure.ts`) — three rules share 507 and
@@ -160,6 +161,8 @@ async def admit_turn(
     files: WorkspaceFiles,
     admission: AdmissionGate | None,
     item_id: str,
+    *,
+    archive: ArchiveGate | None = None,
 ) -> None:
     """Refuse a turn BEFORE the user's message is persisted, naming every limit
     that is at its cap.
@@ -173,7 +176,14 @@ async def admit_turn(
 
     Both gates run even once one has refused. That costs one extra measurement
     on a path that is already failing, and buys an answer the person can act on
-    in a single pass."""
+    in a single pass.
+
+    The archive's refusals stand alone and come first (docs/plan-archive-full.md
+    D1, D3): this item's write-backs are being refused, or the archive is below
+    its floor. Work is at risk either way and no limit the person can free
+    changes that, so they are not folded in with the others."""
+    if archive is not None:
+        await archive.check(item_id)
     refusals: list[Exception] = []
     # cpu/memory/count first: if this turn would need a NEW sandbox its owner may
     # not have, that is the refusal whose remedy is one click away.

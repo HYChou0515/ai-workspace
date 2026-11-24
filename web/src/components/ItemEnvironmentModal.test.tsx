@@ -182,7 +182,7 @@ describe("ItemEnvironmentModal — frame", () => {
   it("names both totals — CPU and memory — as tiles, not one unnamed bar", async () => {
     open();
     const gauge = await screen.findByTestId("budget-gauge");
-    expect(gauge.querySelectorAll('[role="progressbar"]')).toHaveLength(2);
+    expect(gauge.querySelectorAll('[role="meter"]')).toHaveLength(2);
     expect(gauge).toHaveTextContent("2 / 4");
     expect(gauge).toHaveTextContent("512.0 MB / 8.0 GB");
   });

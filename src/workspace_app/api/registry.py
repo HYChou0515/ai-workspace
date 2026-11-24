@@ -20,6 +20,7 @@ from typing import Protocol
 
 from ..quota.limits import ResourceLimits
 from ..sandbox.protocol import (
+    ArchiveWriteFailed,
     OutputSink,
     Sandbox,
     SandboxBusy,
@@ -28,6 +29,7 @@ from ..sandbox.protocol import (
     SandboxSpec,
 )
 from ..tooling.external import MountedTool
+from .archive_health import IArchiveFailures
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -143,7 +145,21 @@ class InvestigationRegistry:
     # `migrate_from` dual-read layer); None everywhere else, including once the
     # migration is retired. See `_acquire` for why it must run before `create`.
     durable_backfill: Callable[[str], Awaitable[int]] | None = None
+    # docs/plan-archive-full.md P2: which items the archive is refusing, shared
+    # across pods. Written by `_writeback` and `recheck_archive`. None ⇒ not recorded (tests,
+    # bare registries) and nothing is refused on its account.
+    archive_failures: IArchiveFailures | None = None
+    # How long `recheck_archive` waits on its one write-back. It runs inside a
+    # person's send; a hung archive mount must not hang the send with it.
+    archive_recheck_timeout_s: float = 20.0
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
+    # Items whose refusal THIS pod recorded: the ones its next landed write-back
+    # clears (see `_writeback`).
+    _refused: set[str] = field(default_factory=set)
+    # One recheck in flight per item on this pod (review round 2): every send on a
+    # refused item asks, and a burst must not start a write-back each — on a hung
+    # archive mount each would be one more rsync stuck on the host.
+    _rechecks: dict[str, asyncio.Future[None]] = field(default_factory=dict)
 
     @property
     def _has_durable(self) -> bool:
@@ -164,7 +180,42 @@ class InvestigationRegistry:
         `pack` is for `kill_idle` alone (docs/plan-archive-pack.md): reap is the
         one write-back where the item is globally idle, the sandbox is about to
         go and nobody waits — packing costs time in proportion to bytes. The
-        app-side mirror has no pack; the flag means nothing there."""
+        app-side mirror has no pack; the flag means nothing there.
+
+        docs/plan-archive-full.md P2: one of the two writers of `archive_failures`
+        (the other is `recheck_archive`). A
+        refusal is recorded with the archive's reason and re-raised (every caller
+        already handles a failed write-back); a write-back that lands clears a
+        record THIS pod made. Another pod's record is settled where it matters —
+        `recheck_archive`, before a turn would be refused on it — so a routine
+        checkpoint (every few seconds, every warm item) costs no store call. A
+        store error is logged and never stands in for the write-back's outcome:
+        callers act on that (`close_all` keeps a sandbox whose write-back failed)."""
+        try:
+            await self._writeback_once(inv_id, handle, delete=delete, pack=pack)
+        except ArchiveWriteFailed as exc:
+            if self.archive_failures is not None:
+                logger.warning(
+                    "registry: archive refused the write-back of item %s: %s", inv_id, exc.reason
+                )
+                self._refused.add(inv_id)
+                await self._note_archive(self.archive_failures.record(inv_id, exc.reason))
+            raise
+        if inv_id in self._refused and self.archive_failures is not None:
+            self._refused.discard(inv_id)
+            await self._note_archive(self.archive_failures.clear(inv_id))
+
+    async def _note_archive(self, op: Awaitable[None]) -> None:
+        """Write to the archive-failure store without letting its error replace
+        the write-back's own outcome."""
+        try:
+            await op
+        except Exception:  # noqa: BLE001 — the store is bookkeeping, not the write-back
+            logger.warning("registry: could not update the archive-failure record", exc_info=True)
+
+    async def _writeback_once(
+        self, inv_id: str, handle: SandboxHandle, *, delete: bool, pack: bool = False
+    ) -> None:
         logger.debug(
             "registry: writeback item=%s handle=%s delete=%s pack=%s host_managed=%s",
             inv_id,
@@ -700,6 +751,91 @@ class InvestigationRegistry:
 
         async with session.env_lock:
             await ensure_project_env(self.sandbox, handle, on_output=on_output)
+
+    async def recheck_archive(self, investigation_id: str) -> None:
+        """docs/plan-archive-full.md: settle a recorded refusal once more, before
+        a turn is refused on it.
+
+        The record can outlive what it protects. Its writer is the item's own
+        write-backs, and those come only from a pod holding the item's session
+        — after a rollout, nobody does, and a refused turn never creates one.
+        Refusing on the record alone would stop the item for good, even once the
+        archive was extended. So: write the item's live sandbox back once more
+        (additive, like a checkpoint — a turn may be running). It lands ⇒ the
+        record is cleared (`_writeback`). No sandbox is live ⇒ nothing of the
+        item is waiting to be saved, and the record is cleared too. Refused
+        again ⇒ it stays. Anything else (a busy host) ⇒ it stays: unknown is not
+        safe."""
+        if self.archive_failures is None or not self._has_durable:
+            return
+        pending = self._rechecks.get(investigation_id)
+        if pending is None or pending.done():
+            pending = asyncio.ensure_future(self._recheck_once(investigation_id))
+            self._rechecks[investigation_id] = pending
+            pending.add_done_callback(
+                lambda done, item=investigation_id: (
+                    self._rechecks.pop(item, None) if self._rechecks.get(item) is done else None
+                )
+            )
+        await asyncio.shield(pending)
+
+    async def _recheck_once(self, investigation_id: str) -> None:
+        assert self.archive_failures is not None
+        # Every place the item's sandbox may be. The shared address first: this
+        # pod's own session can hold a handle the host reaped while another pod
+        # rebuilt the sandbox there (review round 1, D-3) — "my handle is gone"
+        # is not "nothing is live".
+        candidates: list[SandboxHandle] = []
+        try:
+            if self.address is not None and (published := await self.address.get(investigation_id)):
+                candidates.append(published)
+            mine = await self.resolve_io_handle(investigation_id)
+        except Exception:  # noqa: BLE001 - unknown is not "saved": the record stays
+            # Review round 3: the address store is the same backend as the record;
+            # a hiccup here must not turn the send into a 500.
+            logger.warning(
+                "registry: could not find the sandbox of item %s to recheck its archive refusal",
+                investigation_id,
+                exc_info=True,
+            )
+            return
+        if mine is not None and mine not in candidates:
+            candidates.append(mine)
+        for handle in candidates:
+            try:
+                await asyncio.wait_for(
+                    self._writeback(investigation_id, handle, delete=False),
+                    self.archive_recheck_timeout_s,
+                )
+                # Landed. Cleared here, not by `_writeback`: the record may be
+                # another pod's.
+                await self._note_archive(self.archive_failures.clear(investigation_id))
+                self._refused.discard(investigation_id)
+                return
+            except SandboxNotFound:
+                continue  # that one is gone; the next may not be
+            except ArchiveWriteFailed:
+                return  # refused again: recorded again by `_writeback`
+            except TimeoutError:
+                logger.warning(
+                    "registry: rechecking the archive refusal of item %s took over %gs",
+                    investigation_id,
+                    self.archive_recheck_timeout_s,
+                )
+                return  # unknown is not "saved": the record stays
+            except Exception:  # noqa: BLE001 — unknown is not "saved": the record stays
+                logger.warning(
+                    "registry: could not recheck the archive refusal of item %s",
+                    investigation_id,
+                    exc_info=True,
+                )
+                return
+        logger.info(
+            "registry: item %s has no live sandbox — its archive refusal is moot",
+            investigation_id,
+        )
+        await self._note_archive(self.archive_failures.clear(investigation_id))
+        self._refused.discard(investigation_id)
 
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now

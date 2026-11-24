@@ -34,7 +34,7 @@ from pydantic import BaseModel
 from .artifact import ArtifactError, env_to_json
 from .cgroup_usage import Target
 from .config import SandboxHostSettings
-from .nfs_archive import NfsArchive
+from .nfs_archive import ArchiveError, NfsArchive
 from .protocol import (
     ExecResult,
     PreviewFailed,
@@ -788,6 +788,21 @@ def make_host_app(
     async def _preview_failed(_request: Request, exc: PreviewFailed) -> JSONResponse:
         # The converter's reason, named so the app raises it as PreviewFailed.
         return _error(exc)
+
+    @app.exception_handler(ArchiveError)
+    async def _archive_refused(_request: Request, exc: ArchiveError) -> JSONResponse:
+        # docs/plan-archive-full.md P1: the archive refused an operation (a full
+        # disk, a dead NFS mount). Without this the app got a bare 500 and the
+        # reason stayed in this pod's log; the app now shows the archive's own
+        # words. Still a 5xx: it did not happen. The app reads the body only on
+        # `/persist`; a restore that fails on create answers the same shape and is
+        # handled as before. The full error, traceback included, stays in this log.
+        # ERROR, as uvicorn logged it when it was unhandled: alerting keyed on it
+        # must still fire when the archive fills.
+        logger.error("host: archive operation failed: %s", exc.reason, exc_info=exc)
+        return JSONResponse(
+            status_code=500, content={"error": "ArchiveWriteFailed", "detail": exc.reason}
+        )
 
     @app.get("/sandboxes")
     async def list_sandboxes() -> dict[str, object]:

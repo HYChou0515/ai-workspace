@@ -87,6 +87,13 @@ function client(): CapacityClient {
     person: vi.fn(async () => personFixture as unknown as Person),
     whatif: vi.fn(async () => whatifFixture as unknown as WhatIfData),
     refresh: vi.fn(async () => {}),
+    archive: vi.fn(async () => ({
+      configured: false,
+      free: null,
+      total: null,
+      warn_free_ratio: 0.2,
+      block_free_ratio: 0.1,
+    })),
   } as CapacityClient;
 }
 

@@ -36,6 +36,7 @@ from ..workflow.handle import WorkflowHandle, aside_lane
 from ..workflow.run import RunStatus, WorkflowRun, is_execution
 from ..workflow.run_identity import RunIdentities
 from ..workflow.steps import CURRENT_STEP, REPAIR_TURN, StepRef
+from .archive_health import ArchiveGate
 from .env_layers import PersonEnv
 from .env_refresh import EnvRefresher
 from .events import TurnEnded
@@ -131,6 +132,7 @@ class WorkflowExecutor:
         turn_concurrency: int = 1,
         ask_llm: ILlm | None = None,
         admission: AdmissionGate | None = None,
+        archive_gate: ArchiveGate | None = None,
         request_env: IRequestEnv | None = None,
         private_env: PrivateEnvStore | None = None,
         env_refresher: EnvRefresher | None = None,
@@ -153,6 +155,8 @@ class WorkflowExecutor:
         self._run_subagent = run_subagent
         # Per-person cpu/memory admission, same gate an interactive turn passes.
         self._admission = admission
+        # docs/plan-archive-full.md P3/P4: the same gate object the chat send asks.
+        self._archive_gate = archive_gate
         # The deploy's request→env seam (#714), asked here for what a turn with
         # NO request behind it gets (`docs/plan-headless-env.md`). None ⇒ a
         # node's tools see the item's env_vars alone, exactly as before.
@@ -291,7 +295,7 @@ class WorkflowExecutor:
         # scheduled headless run is refused too, rather than exempted: an
         # exemption would be a way to spend resources the limit says you do not
         # have, just by scheduling it. #9 in the plan makes the refusal visible.
-        await admit_turn(self._files, self._admission, item_id)
+        await admit_turn(self._files, self._admission, item_id, archive=self._archive_gate)
         # Where the turn persists; the node reads none of it (below).
         try:
             rid = chat_key

@@ -48,8 +48,42 @@ logger = logging.getLogger(__name__)
 Runner = Callable[[list[str]], Awaitable[tuple[int, bytes]]]
 
 
-class RsyncError(RuntimeError):
-    """An rsync invocation exited non-zero."""
+#: How many of rsync's per-file error lines a reason keeps. A full disk fails
+#: every file after the first, one line each; the first few say what happened.
+_REASON_LINES = 3
+
+
+def failure_reason(rc: int, stderr: bytes) -> str:
+    """What rsync said, short enough to show a person (docs/plan-archive-full.md
+    D2): its first few `rsync: …` lines — the specific errors — then how many
+    more, then its `rsync error: … (code N)` summary. Nothing reworded."""
+    lines = [ln.strip() for ln in stderr.decode(errors="replace").splitlines() if ln.strip()]
+    if not lines:
+        return f"rsync exited {rc} with no message"
+    summary = [ln for ln in lines if ln.startswith("rsync error:")][-1:]
+    specific = [ln for ln in lines if not ln.startswith("rsync error:")]
+    kept = specific[:_REASON_LINES]
+    more = [f"… {len(specific) - len(kept)} more"] if len(specific) > len(kept) else []
+    return "\n".join([*kept, *more, *summary])
+
+
+class ArchiveError(RuntimeError):
+    """The archive refused an operation. `reason` is the words the app shows a
+    person when a write-back fails (docs/plan-archive-full.md D2)."""
+
+    def __init__(self, reason: str, detail: str | None = None) -> None:
+        self.reason = reason
+        super().__init__(detail or reason)
+
+
+class RsyncError(ArchiveError):
+    """An rsync invocation exited non-zero; `reason` is what rsync said
+    (`failure_reason`)."""
+
+    def __init__(self, rc: int, stderr: bytes) -> None:
+        super().__init__(
+            failure_reason(rc, stderr), f"rsync exited {rc}: {stderr.decode(errors='replace')}"
+        )
 
 
 def _check_item(item_id: str) -> str:
@@ -61,6 +95,8 @@ def _check_item(item_id: str) -> str:
 # Recursive, copy symlinks as symlinks, preserve permissions + mtimes, and
 # devices/specials — but deliberately NOT owner/group (see module docstring).
 _RSYNC_FLAGS = "-rlptD"
+#: rsync's "partial transfer due to vanished source files".
+_RSYNC_VANISHED = 24
 
 _GEN_RE = re.compile(r"[0-9a-f]{32}")
 # `<item>.pack.<uuid>.tmp`: one per pack being written, so two never share one.
@@ -115,8 +151,14 @@ class NfsArchive:
         state after which the tree is a copy of the dir, and so the only one a
         pack may follow."""
         dst = self._item_dir(item_id)
-        await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(self._new_generation, item_id)
+        try:
+            await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(self._new_generation, item_id)
+        except OSError as exc:
+            # docs/plan-archive-full.md review round 1 (D-1): on a full disk this
+            # small bookkeeping write is the FIRST thing to fail, before rsync
+            # runs — and it must say why as plainly as rsync would.
+            raise ArchiveError(str(exc)) from exc
         # #492 safety valve: a ``--delete`` from an EMPTY source over a NON-empty
         # archive wipes durable data — the exact disaster this feature exists to
         # prevent. An empty source is indistinguishable here from a silently-failed
@@ -134,7 +176,18 @@ class NfsArchive:
             argv.append("--delete")
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
-        await self._invoke(argv)
+        # Exit 24 — "some files vanished before they could be transferred" —
+        # is an agent's temp files coming and going mid-copy (a `pip install`, a
+        # test run). A file renamed while rsync ran may not be copied under its
+        # new name (``--delete`` keeps the old one), so the copy can be short by
+        # what changed during it. On the ADDITIVE checkpoint that is fine: the
+        # sandbox lives on and the next write-back takes it — counted as LANDED,
+        # since read as a refusal it stopped the item's turns during ordinary
+        # work (review round 2). A RECONCILE (``delete``) may be the last copy
+        # before the sandbox goes (Close, reap, a globally idle shutdown), so
+        # there 24 stays a failure, as before this PR, and the sandbox is kept
+        # (review rounds 3-4).
+        await self._invoke(argv, ok=(0,) if delete else (0, _RSYNC_VANISHED))
         return reconcile
 
     async def pack(self, item_id: str, workspace_dir: Path) -> bool:
@@ -294,10 +347,16 @@ class NfsArchive:
         await asyncio.to_thread(_empty_dir, target)
         return False
 
-    async def _invoke(self, argv: list[str]) -> None:
+    async def _invoke(self, argv: list[str], *, ok: tuple[int, ...] = (0,)) -> None:
         rc, stderr = await self._run(argv)
-        if rc != 0:
-            raise RsyncError(f"rsync exited {rc}: {stderr.decode(errors='replace')}")
+        if rc not in ok:
+            raise RsyncError(rc, stderr)
+        if rc:
+            logger.info(
+                "archive: rsync exited %d, counted as done: %s",
+                rc,
+                stderr.decode(errors="replace").strip(),
+            )
 
     async def _default_run(self, argv: list[str]) -> tuple[int, bytes]:
         proc = await asyncio.create_subprocess_exec(

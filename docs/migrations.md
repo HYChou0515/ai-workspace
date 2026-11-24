@@ -3859,6 +3859,59 @@ rollout 時正在跑的清除會在 `terminationGracePeriodSeconds`（120 秒）
   資料都還在，按收起條上的按鈕就會畫出來。
 - 打開一個超過 2100 列的對話，看到收起條，按「↑ 再顯示更早的 1000 則」後剛才看的那則留在原位，就是新版（1101 到 2100 列的對話只會看到一個「顯示其餘 N 則」）。
 
+### 2026-11-24 · #1042 沙盒存檔空間快滿先通知、寫不進去就不讓人繼續做 {#pr-1042}
+
+**設定** — 兩個新 key，有預設值，只有 `sandbox.durable.kind: nfs_tree` 且設了 `nfs_root` 時才生效：
+- `sandbox.durable.block_free_ratio`（預設 `0.1`）：archive 剩餘低於容量的這個比例時，**所有** item 都不能開始新的對話。
+  **⚠️ 升級前（`rollout 前`）先量一次**：在一顆 app pod 上 `df -h <sandbox.durable.nfs_root>`。剩不到 10% 的話，先擴充
+  PVC，或暫時設 `block_free_ratio: 0`。**為什麼**：這是預設就開的行為改變，新版起來就照它擋。
+  **沒做的症狀**：一升級，每個人送出訊息都得到「沒有送出:沙盒存檔空間只剩…，低於 10%…請聯絡管理員」（507 `archive_space_low`）。
+- `sandbox.durable.warn_free_ratio`（預設 `0.2`）：剩餘低於這個比例起通知 superuser（每跨一級一次，回到這條線以上**並維持
+  30 分鐘**才算結束這一次）。要有人收到，`server.superusers` 必須有設（既有的 key，`rollout 前` 確認）；有接 `server.notification_channel`
+  的部署會同時寄出（不用另外設）。**沒設 superusers 的症狀**：沒有人收到預警，直到開始擋才有人發現。
+- 兩個都可以設 `0` 關掉那一項。`block_free_ratio` 設得比 `warn_free_ratio` 高（或一樣），開機 log 會印 warning：
+  會先擋，沒有人先收到通知。
+
+**資料** — 不用 migrate。新增兩張內部表（每個 item 的「寫回被拒」紀錄、「這一次跌破 20%」的起點），開機時自動建立。
+
+**k8s · CI 側**
+- app pod 掛著 archive 的 PVC，路徑等於 `sandbox.durable.nfs_root`——`nfs_tree` 本來就要求，不是新動作；升級前（`rollout 前`）
+  在一顆 app pod 上 `df -h <nfs_root>` 確認看得到（上面那一步順便做了）。**為什麼**：app 從那裡量剩餘空間。**沒掛的症狀**：
+  路徑不存在時量不到（不擋，log 印 `archive: could not measure …`，也沒有預警）；但 app 一寫入 `nfs_tree` 就會在 pod 自己的
+  磁碟上建出這個路徑，之後量到的是 **pod 的磁碟**，數字是錯的，可能誤擋或誤報——而 app 的 durable 寫入也落在 pod 磁碟上，
+  這本來就是 `nfs_tree` 沒掛 PVC 的問題。
+- sandbox-host 和 app 在同一次升級裡一起升（`rollout 前` 準備好新 host 映像，和 app 同一次 rollout；兩者的先後不影響行為）。**為什麼**：寫回被拒時，只有新 host 會把
+  archive 的錯誤原文傳回 app。**沒升的症狀**：使用者看到的原因是 `the sandbox host gave no reason (HTTP 500)`，管理員得去翻
+  host 的 log；擋照樣擋。舊 app 配新 host 沒差：舊 app 收到的還是一個 500。
+
+**行為改變，沒有開關**
+- 某個 item 寫回 archive 失敗（host 對 `/persist` 回**任何** 5xx：磁碟滿、NFS 出錯、host 自己出錯），
+  那個 item 就不能開始新的對話（聊天、workflow 步驟、「請幫我查」卡片都是），回 507 `archive_write_failed`，畫面附 archive 的
+  錯誤原文（例如 `No space left on device`）。開始新對話前會先再試寫回一次（每個候選沙盒最多等 20 秒，最多兩個），成功就放行；那個 item 已經沒有
+  活著的沙盒也放行。**為什麼**：寫不進 archive 的修改只存在 host pod 的磁碟上，下一次重啟就消失。
+- 量不到剩餘空間（mount 出錯或 5 秒沒回應）時不擋，log 印 `archive: could not measure …`；量不到的結果記 30 秒，這段時間不再重量。
+- rsync 回 exit 24（複製途中有檔案消失，例如 `pip install` 的暫存檔）只在定期的增量 checkpoint 算寫回成功。對齊式寫回照升級前
+  一樣算失敗——turn 結束、手動重新整理（`POST …/files/refresh` 回錯）、終端機與 workflow 步驟的寫回；關閉環境（item 的 Close、
+  資源面板的關閉、刪除 item、釋放跑完的 workflow run：這次關閉算失敗，沙盒留著）；回收（沙盒留著，下一輪回收再試）；app 關機（沙盒留著，
+  等下一個 pod 打開這個 item 時再寫回——沒有人打開的話，host 閒置 `SANDBOX_HOST_IDLE_TTL`（預設 1800 秒）後直接收掉，和升級前一樣）。那個 item 會記一筆「寫回被拒」，下一次送訊息先重新確認一次（增量寫回，exit 24 算成功）
+  通常就清掉；同一個 item 還有別的 turn 正在結束、又碰到 exit 24 時，那一次送訊息可能被擋，再送一次即可。host 寫回失敗的 log 是 ERROR（升級前是 uvicorn 印的 ERROR，維持一樣），但文字和 logger 換了：以前是 `uvicorn.error` 的
+  `Exception in ASGI application`，現在是 `sandbox_host.app` 的 `host: archive operation failed: <原因>`。**沒改的症狀**：按舊文字或
+  logger 名稱設的警報不再響（按 level 設的照樣響）。
+- 同一個 item 同時好幾則訊息送出時，每個 pod 只跑一次重新確認，其他人等它的結果。
+- 讀不到「寫回被拒」紀錄（store 出錯）時當作沒有紀錄放行，log 印 `could not read the archive record`。
+- 容量頁（`/capacity`）標題下多一行「沙盒存檔空間：已用 / 總量」。
+- 共用的用量條（`/my-resources`、item 的 Sandbox 視窗、這一行）的無障礙角色從 `progressbar` 改成 `meter`；畫面不變。
+
+**確認做完**（`rollout 後`，staging）：
+1. 開容量頁，看到「沙盒存檔空間」那一行；「剩 Y%」的剩餘量和 `df -h <nfs_root>` 的 **Avail** 對得上（頁面的已用＝總量−可用，
+   底層磁碟有保留區塊時會比 `df` 的 Used 多出那一塊）。
+2. 暫時把 `block_free_ratio` 和 `warn_free_ratio` **都**設成高於目前的剩餘比例（例如剩 35% 就設 `0.5` 和 `0.6`），rollout：
+   在任一個 item 送訊息，得到「沒有送出:沙盒存檔空間只剩…」，數字和 `df` 的 Avail 一致；有設 superusers 的話，兩分鐘內
+   鈴鐺收到「Sandbox archive is …% free」。只調 `block` 不會有通知：通知看的是 `warn`。
+3. 改回原值、rollout，送訊息恢復正常。
+
+**還是舊版 image 時**：容量頁沒有那一行；archive 滿了照舊只在 log 留 `mirror_warm skipped item … (write-back failed)`。
+
 ---
 
 

@@ -376,10 +376,10 @@ describe("MyResourcesPage", () => {
 
     const live = await screen.findByRole("region", { name: "執行中的沙盒" });
     const totals = within(live).getByRole("group", { name: "目前合計" });
-    expect(within(totals).getAllByRole("progressbar")).toHaveLength(3);
+    expect(within(totals).getAllByRole("meter")).toHaveLength(3);
     // …and none of them inside the list, where every entry must be a thing the
     // Close button can act on.
-    expect(within(within(live).getByRole("list")).queryByRole("progressbar")).toBeNull();
+    expect(within(within(live).getByRole("list")).queryByRole("meter")).toBeNull();
   });
 
   it("says how to free disk, because deleting happens in the item", async () => {

@@ -159,6 +159,8 @@ export const qk = {
     ["wuiUsageDetail", itemId, page, days] as const,
   // docs/plan-capacity-usage.md: the capacity dashboard (superusers only).
   capacity: (days: number) => ["capacity", days] as const,
+  // docs/plan-archive-full.md D6: the sandbox archive's use (no period).
+  capacityArchive: () => ["capacity", "archive"] as const,
   capacityPerson: (user: string, days: number) => ["capacity", days, "person", user] as const,
   capacityWhatIf: (days: number, n: number, profile: string, app: string) =>
     ["capacity", days, "whatif", n, profile, app] as const,

@@ -41,6 +41,18 @@ class SandboxNotFound(LookupError):
     was never `create()`d or it was already `kill()`ed."""
 
 
+class ArchiveWriteFailed(RuntimeError):
+    """A write-back to the durable archive did not happen (docs/plan-archive-full.md).
+
+    `reason` is the archive's own words — rsync's, as the sandbox host relays
+    them (a full disk reads "No space left on device (28)"). It is what the item
+    shows the person whose next turn it refuses, so it is never reworded."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"archive write-back failed: {reason}")
+
+
 class SandboxBusy(RuntimeError):
     """Raised when the sandbox is ALIVE but not responding in time — the host is
     overloaded / the op is mid-transfer and keeps timing out (#492).
