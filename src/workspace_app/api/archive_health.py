@@ -249,14 +249,22 @@ class ArchiveGate:
 
 
 class _ArchiveLowEpisode(Struct):
-    """One stretch below the warning floor: when it began. Every notification
-    of the stretch is keyed by it, so recovering above the floor and falling
-    again is a new stretch, told afresh."""
+    """One stretch below the warning floor: when it began, and since when the
+    archive has been back above the floor (None = it is not). Every notification of
+    the stretch is keyed by its start, so recovering and falling again is a new
+    stretch, told afresh."""
 
     started_ms: int
+    above_since_ms: int | None = None
 
 
 _EPISODE_ID = "archive"
+
+#: How long the archive must STAY above the warning floor before a stretch ends
+#: (review round 1, D-4). rsync's writes and deletes nudge the free space either
+#: side of the floor; ending on the first tick above it made every dip a fresh
+#: "below 20%" to every superuser, and to their mail.
+RECOVERED_AFTER_MS = 30 * 60 * 1000
 
 
 def _levels(warn: float, block: float) -> list[float]:
@@ -322,7 +330,7 @@ class ArchiveSpaceWatch:
 
         ratio = free / total
         if ratio >= self._warn:
-            self._end_stretch()
+            self._above_floor()
             return 0
         stretch = self._stretch()
         sent = 0
@@ -371,6 +379,13 @@ class ArchiveSpaceWatch:
         try:
             data = rm.get(_EPISODE_ID).data
             assert isinstance(data, _ArchiveLowEpisode)
+            if data.above_since_ms is not None:
+                # Back below before it had stayed recovered: the same stretch.
+                rm.modify(
+                    _EPISODE_ID,
+                    _ArchiveLowEpisode(started_ms=data.started_ms),
+                    status=RevisionStatus.draft,
+                )
             return data.started_ms
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             pass
@@ -388,8 +403,24 @@ class ArchiveSpaceWatch:
                 return data.started_ms
         return rec.started_ms
 
-    def _end_stretch(self) -> None:
+    def _above_floor(self) -> None:
+        """Above the warning floor this tick. The stretch ends only once it has
+        stayed there for `RECOVERED_AFTER_MS`."""
         rm = self._spec.get_resource_manager(_ArchiveLowEpisode)
-        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
-            rm.delete(_EPISODE_ID)
-            logger.info("archive: back above the warning floor")
+        try:
+            data = rm.get(_EPISODE_ID).data
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return  # no stretch: nothing to end
+        assert isinstance(data, _ArchiveLowEpisode)
+        now = self._now_ms()
+        if data.above_since_ms is None:
+            rm.modify(
+                _EPISODE_ID,
+                _ArchiveLowEpisode(started_ms=data.started_ms, above_since_ms=now),
+                status=RevisionStatus.draft,
+            )
+            return
+        if now - data.above_since_ms >= RECOVERED_AFTER_MS:
+            with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+                rm.delete(_EPISODE_ID)
+                logger.info("archive: back above the warning floor")

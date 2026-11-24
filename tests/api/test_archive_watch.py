@@ -47,15 +47,20 @@ def _rows(spec) -> list[tuple[str, str]]:
     return sorted(out)
 
 
-def _watch(spec, disk: _Disk, tmp_path: Path) -> ArchiveSpaceWatch:
+def _watch(spec, disk: _Disk, tmp_path: Path, now: list[int] | None = None) -> ArchiveSpaceWatch:
     register_archive_health(spec)
+    clock = now if now is not None else [0]
     return ArchiveSpaceWatch(
         spec,
         ArchiveSpace(tmp_path, usage=disk, max_age_s=0),
         superusers=frozenset({"ops-a", "ops-b"}),
         warn_free_ratio=0.2,
         block_free_ratio=0.1,
+        now_ms=lambda: clock[0],
     )
+
+
+_MIN = 60_000
 
 
 async def test_above_the_warning_floor_nobody_is_told(tmp_path: Path):
@@ -99,16 +104,33 @@ async def test_another_pod_does_not_tell_it_again(tmp_path: Path):
     assert len(_rows(spec)) == 2
 
 
-async def test_after_it_recovers_a_new_drop_is_told_again(tmp_path: Path):
+async def test_after_it_stays_recovered_a_new_drop_is_told_again(tmp_path: Path):
     spec = make_spec(default_user="u")
-    disk = _Disk(190)
-    watch = _watch(spec, disk, tmp_path)
+    disk, now = _Disk(190), [0]
+    watch = _watch(spec, disk, tmp_path, now)
     await watch.tick()
     disk.free = 300  # extended
-    await watch.tick()
+    for minute in range(0, 31):  # above the floor for half an hour
+        now[0] = minute * _MIN
+        await watch.tick()
     disk.free = 190  # filling again
+    now[0] = 32 * _MIN
     await watch.tick()
     assert len(_rows(spec)) == 4
+
+
+async def test_hovering_around_the_floor_is_told_once(tmp_path: Path):
+    """Review round 1 (D-4): rsync writes and deletes nudge the free space either
+    side of 20%. Ending the stretch on the first tick above it made every pair
+    of ticks a fresh 'below 20%' to every superuser (and their mail)."""
+    spec = make_spec(default_user="u")
+    disk, now = _Disk(199), [0]
+    watch = _watch(spec, disk, tmp_path, now)
+    for tick in range(10):
+        disk.free = 199 if tick % 2 == 0 else 201
+        now[0] = tick * _MIN
+        await watch.tick()
+    assert len(_rows(spec)) == 2  # once, to each of the two superusers
 
 
 def test_the_running_app_tells_the_superusers(tmp_path: Path):
@@ -129,3 +151,18 @@ def test_the_running_app_tells_the_superusers(tmp_path: Path):
             time.sleep(0.05)
     rows = _rows(spec)
     assert [r for r, _ in rows] == ["ops-a", "ops-a"]  # 20% and 15% crossed
+
+
+async def test_a_recovery_shorter_than_half_an_hour_is_the_same_stretch(tmp_path: Path):
+    spec = make_spec(default_user="u")
+    disk, now = _Disk(190), [0]
+    watch = _watch(spec, disk, tmp_path, now)
+    await watch.tick()
+    disk.free = 300
+    for minute in range(1, 30):  # above the floor, but only 28 minutes
+        now[0] = minute * _MIN
+        await watch.tick()
+    disk.free = 190
+    now[0] = 30 * _MIN
+    await watch.tick()
+    assert len(_rows(spec)) == 2  # not told again
