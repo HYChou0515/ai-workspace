@@ -140,7 +140,6 @@ class NfsArchive:
         workspace_dir: Path,
         *,
         delete: bool,
-        settled: bool = False,
     ) -> bool:
         """rsync the sandbox's local working dir → the item's NFS archive. With
         ``delete`` the archive is reconciled to match exactly (turn-end / reap /
@@ -177,17 +176,16 @@ class NfsArchive:
             argv.append("--delete")
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
-        # Exit 24 — "some files vanished before they could be transferred" — is
-        # an agent's temp files coming and going mid-copy (a `pip install`, a
-        # test run). Everything that still exists was copied, and a vanished file
-        # had nothing left to save: the write-back LANDED. Read as a refusal it
-        # stopped the item's turns during ordinary work (review round 2).
-        # NOT on a ``settled`` write-back (a reap's, the last before the sandbox
-        # is destroyed): files vanishing then mean something was still writing,
-        # and a file renamed past rsync's scan was never copied while
-        # ``--delete`` removed the old one. Failing keeps the sandbox, and the
-        # reap retries (review round 3).
-        await self._invoke(argv, ok=(0,) if settled else (0, _RSYNC_VANISHED))
+        # Exit 24 — "some files vanished before they could be transferred" — on
+        # the ADDITIVE checkpoint is an agent's temp files coming and going
+        # mid-copy (a `pip install`, a test run): everything that still exists
+        # was copied, so it LANDED; read as a refusal it stopped the item's turns
+        # during ordinary work (review round 2). A RECONCILE (``delete``: turn
+        # end, Close, shutdown, reap — the last three destroy the sandbox right
+        # after) keeps it a failure, as before this PR: a file renamed while
+        # rsync ran was never copied under its new name (``--delete`` keeps the
+        # old one), and failing keeps the sandbox (review rounds 3-4).
+        await self._invoke(argv, ok=(0,) if delete else (0, _RSYNC_VANISHED))
         return reconcile
 
     async def pack(self, item_id: str, workspace_dir: Path) -> bool:

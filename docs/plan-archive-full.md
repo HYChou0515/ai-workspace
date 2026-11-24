@@ -43,7 +43,7 @@
 ## 機制
 
 **寫回失敗的原因要傳得回來（P1）**：host 的 `/persist` 把 archive 的錯誤（`ArchiveError`：rsync 非零結束是它的子類
-`RsyncError`——exit 24（複製途中有檔案消失）除外：checkpoint 和 turn 結束時算寫回成功，只有回收前的那一次寫回仍算失敗（review round 2、3）；rsync 之前的小檔寫入失敗——磁碟全滿時最先失敗的就是它——也包成它）回成 JSON 錯誤
+`RsyncError`——exit 24（複製途中有檔案消失）除外：增量 checkpoint 算寫回成功；對齊式寫回（turn 結束、Close、關機、回收，後三個寫完就刪沙盒）照舊算失敗——複製途中被改名的檔案新名字沒被複製到（review round 2–4）；rsync 之前的小檔寫入失敗——磁碟全滿時最先失敗的就是它——也包成它）回成 JSON 錯誤
 （`{"error": "ArchiveWriteFailed", "detail": <原文>}`；`archive_write_failed` 是 app 給前端的 507 code，不是這一個）；
 `HttpSandbox.persist` 把**任何** 5xx 都當成這次寫回沒有發生，丟 `ArchiveWriteFailed(reason)`。舊 host 只回沒有內容的
 500，原因記成 `the sandbox host gave no reason (HTTP 500)`——擋照樣擋。

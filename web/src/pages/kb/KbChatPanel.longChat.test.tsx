@@ -103,7 +103,7 @@ describe("a streamed token in a long KB chat", () => {
 });
 
 describe("a very long KB chat opens with its middle collapsed (docs/plan-chat-collapse-middle.md)", () => {
-  // Drawing 1100 rows took 4.0-6.4 s on CI runners — the default 5 s
+  // Drawing 1100 rows took 3.6-6.65 s on CI runners — the default 5 s
   // timed out on master itself under a parallel run. The time is the render's,
   // not a hang: what this test pins is which rows are drawn.
   it("draws the first 100 and the newest 1000 rows, and the bar between them", async () => {

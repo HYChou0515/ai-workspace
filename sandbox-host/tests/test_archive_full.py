@@ -116,8 +116,14 @@ async def test_files_vanishing_mid_copy_are_not_a_refused_write_back(tmp_path: P
     """Review round 2: an agent's `pip install` or test run creates and deletes
     temp files while a checkpoint copies; rsync then exits 24 ("some files
     vanished before they could be transferred"). The archive took everything that
-    still exists — a vanished file had nothing left to save — so this is a
-    write-back that landed, not one the archive refused (which stops the item)."""
+    still exists — a vanished file had nothing left to save — so this ADDITIVE
+    checkpoint landed, not one the archive refused (which stops the item).
+
+    A reconciling write-back (``delete``) is different (review round 4): a turn
+    end, Close, shutdown and reap all reconcile, and the last three destroy the
+    sandbox right after. A file renamed while rsync ran was never copied under its
+    new name, so there exit 24 stays a failure — as it was before this PR — and
+    the sandbox is kept."""
 
     async def vanished(argv: list[str]) -> tuple[int, bytes]:
         if argv[0] != "rsync":
@@ -136,7 +142,8 @@ async def test_files_vanishing_mid_copy_are_not_a_refused_write_back(tmp_path: P
         additive = await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
         reconcile = await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})
     assert additive.status_code == 204
-    assert reconcile.status_code == 204
+    assert reconcile.status_code == 500
+    assert reconcile.json()["error"] == "ArchiveWriteFailed"
 
 
 async def test_an_item_dir_that_cannot_be_made_says_why(tmp_path: Path):
@@ -185,10 +192,9 @@ async def test_a_refused_archive_is_logged_as_an_error(tmp_path: Path, caplog):
 async def test_files_vanishing_during_a_reaps_write_back_keep_the_sandbox(tmp_path: Path):
     """Review round 3: a reap's write-back is the last before the sandbox is
     destroyed. Files vanishing then mean something was still writing — a file
-    renamed past rsync's scan was never copied, and `--delete` already removed
-    the archive's old copy. A checkpoint or turn end can count that as landed
-    (the next reconcile repairs it); the reap cannot: it must fail, so the
-    sandbox is kept and the reap retries."""
+    renamed while rsync ran was never copied under its new name (`--delete`
+    keeps the old one). It must fail, so the sandbox is kept and the reap
+    retries."""
 
     async def vanished(argv: list[str]) -> tuple[int, bytes]:
         if argv[0] != "rsync":

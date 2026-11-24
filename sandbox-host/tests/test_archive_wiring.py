@@ -26,9 +26,7 @@ class _FakeArchive:
         self.restored.append((item_id, str(workspace_dir)))
         return item_id in self.has_archive_for
 
-    async def persist(
-        self, item_id: str, workspace_dir: Path, *, delete: bool, settled: bool = False
-    ) -> bool:
+    async def persist(self, item_id: str, workspace_dir: Path, *, delete: bool) -> bool:
         self.persisted.append((item_id, str(workspace_dir), delete))
         return delete
 
