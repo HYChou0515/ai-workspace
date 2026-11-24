@@ -283,3 +283,33 @@ def test_floors_in_the_usual_order_say_nothing_at_boot(tmp_path: Path, caplog):
         archive_warn_free_ratio=0.2,
     )
     assert "block_free_ratio" not in caplog.text
+
+
+async def test_an_unknown_answer_is_reused_rather_than_waited_for_again(tmp_path: Path):
+    """Review round 2: with the mount hung, each send waited the full timeout
+    for the one outstanding measurement — every turn on every item, 5 s, until
+    the mount recovered. Unknown is remembered as long as a figure would be."""
+    import asyncio
+    import threading
+    import time as _time
+
+    release = threading.Event()
+
+    def hangs(_path: Any) -> Any:
+        release.wait(5)
+        return shutil._ntuple_diskusage(1000, 0, 1000)  # type: ignore[attr-defined]
+
+    space = ArchiveSpace(tmp_path, usage=hangs, max_age_s=30, timeout_s=0.2)
+    try:
+        assert await space.measure() is None  # waited once
+        t0 = _time.monotonic()
+        assert await space.measure() is None
+        assert _time.monotonic() - t0 < 0.1  # not again
+    finally:
+        release.set()
+        await asyncio.sleep(0)
+
+
+async def test_any_error_from_the_measurement_is_unknown(tmp_path: Path):
+    space = ArchiveSpace(tmp_path, usage=_BrokenDisk(ValueError("odd")), max_age_s=0)
+    assert await space.measure() is None

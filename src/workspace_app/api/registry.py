@@ -146,7 +146,7 @@ class InvestigationRegistry:
     # migration is retired. See `_acquire` for why it must run before `create`.
     durable_backfill: Callable[[str], Awaitable[int]] | None = None
     # docs/plan-archive-full.md P2: which items the archive is refusing, shared
-    # across pods. `_writeback` is its one writer. None ⇒ not recorded (tests,
+    # across pods. Written by `_writeback` and `recheck_archive`. None ⇒ not recorded (tests,
     # bare registries) and nothing is refused on its account.
     archive_failures: IArchiveFailures | None = None
     # How long `recheck_archive` waits on its one write-back. It runs inside a
@@ -156,6 +156,10 @@ class InvestigationRegistry:
     # Items whose refusal THIS pod recorded: the ones its next landed write-back
     # clears (see `_writeback`).
     _refused: set[str] = field(default_factory=set)
+    # One recheck in flight per item on this pod (review round 2): every send on a
+    # refused item asks, and a burst must not start a write-back each — on a hung
+    # archive mount each would be one more rsync stuck on the host.
+    _rechecks: dict[str, asyncio.Future[None]] = field(default_factory=dict)
 
     @property
     def _has_durable(self) -> bool:
@@ -178,7 +182,8 @@ class InvestigationRegistry:
         go and nobody waits — packing costs time in proportion to bytes. The
         app-side mirror has no pack; the flag means nothing there.
 
-        docs/plan-archive-full.md P2: the ONE writer of `archive_failures`. A
+        docs/plan-archive-full.md P2: one of the two writers of `archive_failures`
+        (the other is `recheck_archive`). A
         refusal is recorded with the archive's reason and re-raised (every caller
         already handles a failed write-back); a write-back that lands clears a
         record THIS pod made. Another pod's record is settled where it matters —
@@ -763,6 +768,19 @@ class InvestigationRegistry:
         safe."""
         if self.archive_failures is None or not self._has_durable:
             return
+        pending = self._rechecks.get(investigation_id)
+        if pending is None or pending.done():
+            pending = asyncio.ensure_future(self._recheck_once(investigation_id))
+            self._rechecks[investigation_id] = pending
+            pending.add_done_callback(
+                lambda done, item=investigation_id: (
+                    self._rechecks.pop(item, None) if self._rechecks.get(item) is done else None
+                )
+            )
+        await asyncio.shield(pending)
+
+    async def _recheck_once(self, investigation_id: str) -> None:
+        assert self.archive_failures is not None
         # Every place the item's sandbox may be. The shared address first: this
         # pod's own session can hold a handle the host reaped while another pod
         # rebuilt the sandbox there (review round 1, D-3) — "my handle is gone"

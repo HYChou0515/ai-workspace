@@ -797,7 +797,9 @@ def make_host_app(
         # words. Still a 5xx: it did not happen. The app reads the body only on
         # `/persist`; a restore that fails on create answers the same shape and is
         # handled as before. The full error, traceback included, stays in this log.
-        logger.warning("host: archive operation failed: %s", exc.reason, exc_info=exc)
+        # ERROR, as uvicorn logged it when it was unhandled: alerting keyed on it
+        # must still fire when the archive fills.
+        logger.error("host: archive operation failed: %s", exc.reason, exc_info=exc)
         return JSONResponse(
             status_code=500, content={"error": "ArchiveWriteFailed", "detail": exc.reason}
         )

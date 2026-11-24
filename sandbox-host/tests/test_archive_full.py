@@ -160,3 +160,23 @@ async def test_an_item_dir_that_cannot_be_made_says_why(tmp_path: Path):
     assert r.status_code == 500
     assert r.json()["error"] == "ArchiveWriteFailed"
     assert "Not a directory" in r.json()["detail"] or "File exists" in r.json()["detail"]
+
+
+async def test_a_refused_archive_is_logged_as_an_error(tmp_path: Path, caplog):
+    """Review round 2: unhandled, a failed persist was logged at ERROR by
+    uvicorn; handled, it must stay an ERROR — alerting keyed on it must still
+    fire when the archive fills."""
+    import logging
+
+    async def full_disk(argv: list[str]) -> tuple[int, bytes]:
+        return (11, _REAL_ENOSPC) if argv[0] == "rsync" else (0, b"")
+
+    archive = NfsArchive(tmp_path / "nfs", runner=full_disk)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "live", isolate=False)
+    app = make_host_app(sandbox, advertise_url="http://h", archive=archive)
+    with caplog.at_level(logging.WARNING, logger="sandbox_host.app"):
+        async with _client(app) as c:
+            rid = (await c.post("/sandboxes", json={"item_id": "item-1"})).json()["remote_id"]
+            await c.post(f"/sandboxes/{rid}/persist", json={"delete": False})
+    refused = [r for r in caplog.records if "archive operation failed" in r.getMessage()]
+    assert refused and all(r.levelno == logging.ERROR for r in refused)

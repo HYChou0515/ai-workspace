@@ -144,3 +144,22 @@ def test_once_the_archive_takes_write_backs_again_the_next_send_goes_through():
         sandbox.refuse = ""  # the archive is extended
 
         assert client.post(f"/a/rca/items/{iid}/messages", json={"content": "b"}).status_code == 202
+
+
+def test_a_store_that_cannot_be_read_does_not_fail_every_send(monkeypatch, caplog):
+    """Review round 2: the gate reads the item's record on every send and every
+    workflow step. A store hiccup there turned every turn into a 500 — on every
+    deploy, including ones where nothing can ever be recorded. Not knowing is
+    not 'refused': the turn goes through, and the log says why."""
+    from workspace_app.api.archive_health import SpecstarArchiveFailures
+
+    async def broken(self, item_id: str) -> str | None:  # noqa: ANN001
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(SpecstarArchiveFailures, "reason_of", broken)
+    sandbox, runner = _ArchiveSandbox(), _Runner()
+    app, _spec, iid = _app(sandbox, runner)
+    with TestClient(app) as client:
+        resp = client.post(f"/a/rca/items/{iid}/messages", json={"content": "go"})
+        assert resp.status_code == 202
+    assert "could not read the archive record" in caplog.text

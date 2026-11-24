@@ -8,9 +8,12 @@ message lands on. Hence a shared row per item, like the activity heartbeat and
 the sandbox address (`sandbox_activity.py`, `sandbox_address.py`): registered
 post-`spec.apply`, so it has no CRUD routes of its own.
 
-One writer: `InvestigationRegistry._writeback`, which every checkpoint, turn-end
-reconcile and reap goes through. A refusal records the reason; any write-back
-that lands clears it, whichever pod made it."""
+Two writers, both on `InvestigationRegistry`. `_writeback` — which every
+checkpoint, turn-end reconcile and reap goes through — records a refusal, and
+clears a record THIS pod made once one of its write-backs lands.
+`recheck_archive`, asked by the turn gate before a turn would be refused,
+clears any pod's record once the item's live sandbox writes back (or none is
+live)."""
 
 from __future__ import annotations
 
@@ -166,6 +169,10 @@ class ArchiveSpace:
         self._max_age_s = max_age_s
         self._timeout_s = timeout_s
         self._last: tuple[float, int, int] | None = None
+        # When the last measurement came back unknown: remembered as long as a
+        # figure would be, so a hung mount costs ONE wait per `max_age_s`, not
+        # one per send (review round 2).
+        self._unknown_at: float | None = None
         self._inflight: asyncio.Future[Any] | None = None
 
     async def measure(self) -> tuple[int, int] | None:
@@ -174,6 +181,8 @@ class ArchiveSpace:
         now = self._clock()
         if self._last is not None and now - self._last[0] < self._max_age_s:
             return self._last[1], self._last[2]
+        if self._unknown_at is not None and now - self._unknown_at < self._max_age_s:
+            return None
         if self._inflight is None or self._inflight.done():
             self._inflight = asyncio.ensure_future(asyncio.to_thread(self._usage, self.root))
         try:
@@ -182,10 +191,13 @@ class ArchiveSpace:
             logger.warning(
                 "archive: could not measure %s: no answer within %gs", self.root, self._timeout_s
             )
+            self._unknown_at = self._clock()
             return None
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 — any failure to measure is "unknown"
             logger.warning("archive: could not measure %s: %s", self.root, exc)
+            self._unknown_at = self._clock()
             return None
+        self._unknown_at = None
         self._last = (self._clock(), int(du.free), int(du.total))
         return int(du.free), int(du.total)
 
@@ -233,10 +245,10 @@ class ArchiveGate:
         self._recheck = recheck
 
     async def check(self, item_id: str) -> None:
-        if self.failures is not None and await self.failures.reason_of(item_id):
+        if self.failures is not None and await self._reason(item_id):
             if self._recheck is not None:
                 await self._recheck(item_id)
-            if reason := await self.failures.reason_of(item_id):
+            if reason := await self._reason(item_id):
                 raise ArchiveRefusing(item_id, reason)
         if self.space is None or self.block_free_ratio <= 0:
             return
@@ -246,6 +258,19 @@ class ArchiveGate:
         free, total = measured
         if total and free < total * self.block_free_ratio:
             raise ArchiveSpaceLow(free, total, self.block_free_ratio)
+
+    async def _reason(self, item_id: str) -> str | None:
+        """This item's recorded refusal, or None — including when the store cannot
+        be read: every turn on every deploy asks, and a store hiccup must not turn
+        each into a 500 (review round 2). Not knowing is not "refused"."""
+        assert self.failures is not None
+        try:
+            return await self.failures.reason_of(item_id)
+        except Exception:  # noqa: BLE001 — unknown is not refused; said in the log
+            logger.warning(
+                "archive: could not read the archive record of item %s", item_id, exc_info=True
+            )
+            return None
 
 
 class _ArchiveLowEpisode(Struct):

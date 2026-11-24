@@ -150,6 +150,11 @@ async def test_a_store_that_errors_does_not_change_what_the_write_back_reports()
     with contextlib.suppress(ArchiveWriteFailed):
         await registry._writeback("item-1", handle, delete=False)
         raise AssertionError("the refusal must surface as ArchiveWriteFailed")
+    # …and the write-back that lands AFTER a refusal tries to clear it: that
+    # store error must not turn a landed write-back into a failed one either.
+    sandbox.refuse = ""
+    await registry._writeback("item-1", handle, delete=False)  # lands: no raise
+    await registry.recheck_archive("item-1")  # its clears are guarded too
 
 
 async def test_a_recheck_that_hangs_gives_up_and_keeps_the_record():
@@ -248,4 +253,31 @@ async def test_a_recheck_that_lands_on_the_live_sandbox_clears_it():
     await registry.recheck_archive("item-1")
 
     assert sandbox.written == [live.id]  # cleared because it LANDED, not as moot
+    assert await store.reason_of("item-1") is None
+
+
+async def test_concurrent_rechecks_of_one_item_run_one_write_back():
+    """Review round 2: every send on a refused item rechecks it. Three sends at
+    once ran three rsyncs — on a hung archive mount, three more stuck on the
+    host per burst. One recheck in flight per item; the others wait for it."""
+    import asyncio
+
+    store = _store()
+    registry, sandbox = await _registry(store)
+    await store.record("item-1", _ENOSPC)
+    started = 0
+    release = asyncio.Event()
+
+    async def slow(handle: SandboxHandle, *, delete: bool, pack: bool = False) -> None:
+        nonlocal started
+        started += 1
+        await release.wait()
+
+    sandbox.persist = slow  # ty: ignore[invalid-assignment]
+    tasks = [asyncio.create_task(registry.recheck_archive("item-1")) for _ in range(3)]
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.gather(*tasks)
+
+    assert started == 1
     assert await store.reason_of("item-1") is None
