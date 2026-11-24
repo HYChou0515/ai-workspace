@@ -20,6 +20,7 @@ from typing import Protocol
 
 from ..quota.limits import ResourceLimits
 from ..sandbox.protocol import (
+    ArchiveWriteFailed,
     OutputSink,
     Sandbox,
     SandboxBusy,
@@ -28,6 +29,7 @@ from ..sandbox.protocol import (
     SandboxSpec,
 )
 from ..tooling.external import MountedTool
+from .archive_health import IArchiveFailures
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -143,6 +145,10 @@ class InvestigationRegistry:
     # `migrate_from` dual-read layer); None everywhere else, including once the
     # migration is retired. See `_acquire` for why it must run before `create`.
     durable_backfill: Callable[[str], Awaitable[int]] | None = None
+    # docs/plan-archive-full.md P2: which items the archive is refusing, shared
+    # across pods. `_writeback` is its one writer. None ⇒ not recorded (tests,
+    # bare registries) and nothing is refused on its account.
+    archive_failures: IArchiveFailures | None = None
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
 
     @property
@@ -164,7 +170,27 @@ class InvestigationRegistry:
         `pack` is for `kill_idle` alone (docs/plan-archive-pack.md): reap is the
         one write-back where the item is globally idle, the sandbox is about to
         go and nobody waits — packing costs time in proportion to bytes. The
-        app-side mirror has no pack; the flag means nothing there."""
+        app-side mirror has no pack; the flag means nothing there.
+
+        docs/plan-archive-full.md P2: the ONE writer of `archive_failures`. A
+        refusal is recorded with the archive's reason and re-raised (every caller
+        already handles a failed write-back); a write-back that lands clears the
+        item's record, whichever pod made the failing one."""
+        try:
+            await self._writeback_once(inv_id, handle, delete=delete, pack=pack)
+        except ArchiveWriteFailed as exc:
+            if self.archive_failures is not None:
+                logger.warning(
+                    "registry: archive refused the write-back of item %s: %s", inv_id, exc.reason
+                )
+                await self.archive_failures.record(inv_id, exc.reason)
+            raise
+        if self.archive_failures is not None:
+            await self.archive_failures.clear(inv_id)
+
+    async def _writeback_once(
+        self, inv_id: str, handle: SandboxHandle, *, delete: bool, pack: bool = False
+    ) -> None:
         logger.debug(
             "registry: writeback item=%s handle=%s delete=%s pack=%s host_managed=%s",
             inv_id,

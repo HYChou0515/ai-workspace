@@ -108,6 +108,7 @@ from ..workflow.user_schedules import ITEM_SCHEDULES_PATH, SchedulePolicy
 from . import perf_trace
 from .activity import ActivityLog
 from .agent_progress import make_relay
+from .archive_health import SpecstarArchiveFailures, register_archive_health
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
@@ -887,6 +888,10 @@ def create_app(
     from ..sandbox.http_client import HttpSandbox
 
     activity_store: IActivityStore = SpecstarActivityStore(spec)
+    # docs/plan-archive-full.md P2: which items the archive is refusing — written
+    # by the registry's write-back, read by the turn gate (P3). Shared because the
+    # pod whose checkpoint failed is rarely the one the next message lands on.
+    archive_failures = SpecstarArchiveFailures(spec)
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE
@@ -1321,6 +1326,7 @@ def create_app(
         sync=sync,
         activity=activity_store,
         address=address_store,
+        archive_failures=archive_failures,
         host_managed_durable=host_managed_durable,
         durable_backfill=resolve_durable_backfill(
             filestore, host_managed_durable=host_managed_durable
@@ -1972,6 +1978,9 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    # docs/plan-archive-full.md P2: post-apply for the same reason — a
+    # coordination row with no CRUD routes, there before any write-back.
+    register_archive_health(spec)
     # Workflow runs: post-apply so the run table has no CRUD routes of its own —
     # it had them with no gate at all (#870). Before anything reads a run.
     register_workflow_run(spec)
